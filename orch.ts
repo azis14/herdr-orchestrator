@@ -4,6 +4,7 @@ import { OrchError } from "./src/errors";
 import { Herdr } from "./src/herdr";
 import { openProject } from "./src/open";
 import { loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
+import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
 
 export type GitRunner = (cwd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 
@@ -30,7 +31,9 @@ export interface Deps {
 
 const USAGE = `usage: bun orch.ts <command>
 
-  open <project> [agent]         open an agent in a new tab of the project's workspace`;
+  open <project> [agent]         open an agent in a new tab of the project's workspace
+  skills [project] [--resolve <skill>] [--json]
+                                 list orchestrator or repo skills; resolve which copy an agent uses`;
 
 type Command = (args: string[], deps: Deps) => Promise<number>;
 
@@ -44,6 +47,31 @@ const commands: Record<string, Command> = {
       `opened ${r.agentName} (${r.agent}) in ${r.project}: workspace ${r.workspaceId} tab ${r.tabId} pane ${r.paneId}` +
         (r.createdWorkspace ? " [new workspace]" : ""),
     );
+    return 0;
+  },
+
+  async skills(args, deps) {
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { resolve: { type: "string" }, json: { type: "boolean" } },
+    });
+    const [project] = positionals;
+    const print = (data: unknown, text: string) => deps.out(values.json ? JSON.stringify(data, null, 2) : text);
+    if (!project) {
+      if (values.resolve) throw new OrchError("--resolve needs a project");
+      const own = scanSkills(deps.root);
+      print(own, own.map((s) => s.name).join("\n"));
+    } else if (values.resolve) {
+      const r = resolveSkill(deps.reg, project, values.resolve, deps.root);
+      print(r, `${r.source} ${r.path}`);
+    } else {
+      const ps = projectSkills(deps.reg, project, deps.root);
+      const lines = ps.repoSkills.map((s) => s.name);
+      if (!lines.length) lines.push("(no repo skills)");
+      lines.push(`also in orchestrator: ${ps.alsoInOrchestrator.join(", ") || "-"}`);
+      print(ps, lines.join("\n"));
+    }
     return 0;
   },
 };

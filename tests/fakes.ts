@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Deps } from "../orch";
+import { Herdr, type Runner } from "../src/herdr";
 import type { Registry } from "../src/registry";
-import type { Runner } from "../src/herdr";
 
 export type FakeReply = { code?: number; stdout?: unknown; stderr?: unknown };
 export type FakeHandler = (args: string[]) => FakeReply;
@@ -53,3 +54,26 @@ export const ws = (workspace_id: string, label: string, number: number, focused 
   number,
   focused,
 });
+
+export function testDeps(handlers: Record<string, FakeHandler> = {}, overrides: Partial<Deps> = {}) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const run = fakeRunner({
+    "workspace list": () => ok({ workspaces: [ws("w5", "shop-api", 2)] }),
+    "agent list": () => ok({ agents: [] }),
+    "tab create": (a) => ok({ tab: { tab_id: `${a[3]}:t9` }, root_pane: { pane_id: `${a[3]}:p9` } }),
+    "agent start": () => ok({}),
+    ...handlers,
+  });
+  const deps: Deps = {
+    herdr: new Herdr(run),
+    reg: testRegistry(),
+    root: fs.mkdtempSync(path.join(os.tmpdir(), "orch-root-")),
+    git: async () => ({ code: 0, stdout: "", stderr: "" }),
+    out: (s) => out.push(s),
+    err: (s) => err.push(s),
+    now: () => new Date(2026, 9, 23),
+    ...overrides,
+  };
+  return { deps, out, err, run };
+}
