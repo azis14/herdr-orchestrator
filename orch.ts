@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { OrchError } from "./src/errors";
 import { Herdr } from "./src/herdr";
+import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { openProject } from "./src/open";
 import { loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
@@ -33,7 +34,12 @@ const USAGE = `usage: bun orch.ts <command>
 
   open <project> [agent]         open an agent in a new tab of the project's workspace
   skills [project] [--resolve <skill>] [--json]
-                                 list orchestrator or repo skills; resolve which copy an agent uses`;
+                                 list orchestrator or repo skills; resolve which copy an agent uses
+  job new <slug> --title T --request R --projects a,b
+  job list | job show <id> | job stage <id> <stage> | job log <id> <text>
+  job agent <id> <agentName> key=value...   (status, designPath, planPath, branch, worktreePath)`;
+
+const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
 
 type Command = (args: string[], deps: Deps) => Promise<number>;
 
@@ -73,6 +79,68 @@ const commands: Record<string, Command> = {
       print(ps, lines.join("\n"));
     }
     return 0;
+  },
+
+  async job(args, deps) {
+    const [sub, ...rest] = args;
+    const need = (v: string | undefined, what: string) => {
+      if (!v) throw new OrchError(`job ${sub}: missing ${what}`);
+      return v;
+    };
+    switch (sub) {
+      case "new": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { title: { type: "string" }, request: { type: "string" }, projects: { type: "string" } },
+        });
+        const job = newJob(deps.root, deps.reg, {
+          slug: need(positionals[0], "<slug>"),
+          title: need(values.title, "--title"),
+          request: need(values.request, "--request"),
+          projects: need(values.projects, "--projects").split(",").map((p) => p.trim()).filter(Boolean),
+          now: deps.now(),
+        });
+        deps.out(job.id);
+        return 0;
+      }
+      case "list": {
+        const jobs = listJobs(deps.root);
+        deps.out(jobs.map((j) => `${j.id}  ${j.stage}  ${j.projects.join(",")}  ${j.title}`).join("\n") || "(no jobs)");
+        return 0;
+      }
+      case "show": {
+        const job = loadJob(deps.root, need(rest[0], "<id>"));
+        deps.out(JSON.stringify(job, null, 2));
+        deps.out(`summary: ${deps.root}/jobs/${job.id}/summary.md`);
+        return 0;
+      }
+      case "stage": {
+        const job = setStage(deps.root, need(rest[0], "<id>"), need(rest[1], "<stage>") as Stage);
+        deps.out(`${job.id} stage ${job.stage}`);
+        return 0;
+      }
+      case "log": {
+        appendLog(deps.root, need(rest[0], "<id>"), need(rest.slice(1).join(" ") || undefined, "<text>"), deps.now());
+        return 0;
+      }
+      case "agent": {
+        const [id, agentName, ...pairs] = rest;
+        const patch: Partial<JobAgent> = {};
+        for (const pair of pairs) {
+          const eq = pair.indexOf("=");
+          const key = eq > 0 ? pair.slice(0, eq) : pair;
+          if (!(PATCHABLE as readonly string[]).includes(key)) {
+            throw new OrchError(`job agent: cannot set "${key}". Settable: ${PATCHABLE.join(", ")}`);
+          }
+          (patch as Record<string, string>)[key] = pair.slice(eq + 1);
+        }
+        patchAgent(deps.root, need(id, "<id>"), need(agentName, "<agentName>"), patch);
+        return 0;
+      }
+      default:
+        throw new OrchError("usage: job new|list|show|stage|log|agent ...");
+    }
   },
 };
 
