@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { Registry } from "../src/registry";
 import type { Runner } from "../src/herdr";
 
 export type FakeReply = { code?: number; stdout?: unknown; stderr?: unknown };
@@ -23,3 +27,29 @@ export function fakeRunner(handlers: Record<string, FakeHandler>): FakeRunner {
   run.calls = calls;
   return run;
 }
+
+/** A registry whose projects point at fresh temp dirs (so getProject's existence check passes). */
+export function testRegistry(names: string[] = ["shop-api", "shop-ui"]): Registry {
+  return {
+    defaultAgent: "claude",
+    agents: [
+      { name: "claude", kind: "claude", openArgs: [], jobArgs: [] },
+      { name: "cursor", kind: "cursor", openArgs: [], jobArgs: ["--force"] },
+    ],
+    projects: names.map((name) => ({
+      name,
+      path: fs.mkdtempSync(path.join(os.tmpdir(), `orch-${name}-`)),
+      description: name,
+      context: [],
+    })),
+  };
+}
+
+export const ok = (result: unknown): FakeReply => ({ stdout: { id: "cli:x", result } });
+
+export const ws = (workspace_id: string, label: string, number: number, focused = false) => ({
+  workspace_id,
+  label,
+  number,
+  focused,
+});
