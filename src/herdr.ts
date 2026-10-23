@@ -136,11 +136,16 @@ export class Herdr {
     return (await this.call(["tab", "list", "--workspace", workspaceId])).tabs ?? [];
   }
 
-  /** Pids of a pane's foreground processes whose name is `name`. */
+  /**
+   * Pids of a pane's foreground processes named `name`. When none is named that (an agent whose process
+   * isn't called after its kind, e.g. `node`), every foreground pid: the foreground group is the agent's,
+   * so this errs toward "busy", never toward "closable".
+   */
   async processPids(paneId: string, name: string): Promise<number[]> {
     const r = await this.call(["pane", "process-info", "--pane", paneId]);
     const procs: { pid: number; name: string }[] = r.process_info?.foreground_processes ?? [];
-    return procs.filter((p) => p.name === name).map((p) => p.pid);
+    const named = procs.filter((p) => p.name === name);
+    return (named.length ? named : procs).map((p) => p.pid);
   }
 
   /** The pane's last `lines` lines. `agent read` prints plain text, not JSON, so this bypasses `call`. */

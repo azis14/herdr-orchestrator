@@ -115,6 +115,21 @@ describe("findDormant", () => {
     expect(r.skipped[0]).toMatchObject({ workspace: "shop2.0" });
   });
 
+  test("a cursor agent whose foreground process is named node is still checked for children", async () => {
+    const { deps } = setup(
+      {
+        agents: [agent({ agent: "cursor", name: "cursor-1" })],
+        procs: { "w3:p1": [{ pid: 9, name: "node" }] },
+      },
+      { children: async (pid: number) => (pid === 9 ? [42] : []) },
+    );
+    const r = await findDormant(deps, opts);
+    expect(r.candidates).toEqual([]);
+    expect(r.skipped).toEqual([
+      { agentName: "cursor-1", paneId: "w3:p1", workspace: "shop2.0", reason: "running child processes" },
+    ]);
+  });
+
   test("only inspects processes of agents that passed the state and idle checks", async () => {
     const { deps, run } = setup({
       agents: [

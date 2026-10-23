@@ -101,6 +101,23 @@ describe("Herdr", () => {
     expect(run.calls[0]).toEqual(["pane", "process-info", "--pane", "w3:p1"]);
   });
 
+  test("processPids falls back to every foreground pid when none matches the name", async () => {
+    const run = fakeRunner({
+      "pane process-info": () =>
+        ok({
+          process_info: {
+            pane_id: "w3:p1",
+            shell_pid: 1,
+            foreground_processes: [
+              { pid: 20, name: "node", cwd: "/r" },
+              { pid: 21, name: "rg", cwd: "/r" },
+            ],
+          },
+        }),
+    });
+    expect(await new Herdr(run).processPids("w3:p1", "cursor")).toEqual([20, 21]);
+  });
+
   test("readAgent returns raw stdout and throws HerdrError on failure", async () => {
     const run = fakeRunner({ "agent read": (a) => (a[2] === "gone" ? { code: 1, stderr: "no such pane" } : { stdout: "line 1\nline 2\n" }) });
     const h = new Herdr(run);
