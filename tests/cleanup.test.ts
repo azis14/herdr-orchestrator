@@ -504,4 +504,59 @@ describe("closeAgents", () => {
     expect(loadJob(deps.root, job.id).agents[0].sessionId).toBeUndefined();
     expect(fs.readFileSync(path.join(deps.root, "jobs", job.id, "log.md"), "utf8")).toContain("(session none, folder /nowhere)");
   });
+
+  describe("a failed close leaves the job record accurate", () => {
+    const rec = (o: object = {}) => ({
+      project: "shop-api", agent: "claude", agentName: "api-x", workspaceId: "w3", tabId: "w3:t1",
+      paneId: "w3:p1", mode: "herdr-worktree" as const, status: "started", sessionId: "old", lastCwd: "/old", ...o,
+    });
+    const world = (handlers: Record<string, (a: string[]) => object>) =>
+      setup(
+        { agents: [agent({ name: "api-x", cwd: "/new", agent_session: session("s1") })], tabs: { w3: [tab("w3:t1"), tab("w3:t2")] } },
+        {},
+        handlers,
+      );
+    const logOf = (deps: { root: string }, id: string) => fs.readFileSync(path.join(deps.root, "jobs", id, "log.md"), "utf8");
+
+    test("herdr refusing the close restores status, session and folder, and logs why", async () => {
+      const { deps } = world({ "tab close": () => ({ code: 1, stderr: "boom" }) });
+      const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+      upsertAgent(deps.root, job.id, rec());
+      const r = await closeAgents(deps, ["w3:p1@0-0"]);
+      expect(r.refused[0].reason).toContain("close failed");
+      expect(loadJob(deps.root, job.id).agents[0]).toEqual(rec());
+      expect(logOf(deps, job.id)).toContain("cleanup could not close api-x: ");
+      expect(logOf(deps, job.id)).toContain("boom");
+    });
+
+    test("restoring leaves no sessionId or lastCwd that were not there before", async () => {
+      const { deps } = world({ "tab close": () => ({ code: 1, stderr: "boom" }) });
+      const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+      upsertAgent(deps.root, job.id, rec({ sessionId: undefined, lastCwd: undefined }));
+      await closeAgents(deps, ["w3:p1@0-0"]);
+      const a = loadJob(deps.root, job.id).agents[0];
+      expect(a.status).toBe("started");
+      expect("sessionId" in a || "lastCwd" in a).toBe(false);
+    });
+
+    test("an unexpected error is undone too, then rethrown", async () => {
+      const { deps } = world({ "tab close": () => { throw new Error("kaboom"); } });
+      const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+      upsertAgent(deps.root, job.id, rec());
+      await expect(closeAgents(deps, ["w3:p1@0-0"])).rejects.toThrow("kaboom");
+      expect(loadJob(deps.root, job.id).agents[0]).toEqual(rec());
+      expect(logOf(deps, job.id)).toContain("cleanup could not close api-x: kaboom");
+    });
+
+    test("the record is matched by agent name before pane id", async () => {
+      const { deps } = world({});
+      const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+      upsertAgent(deps.root, job.id, rec({ agentName: "older", status: "stopped" })); // same pane id, earlier agent
+      upsertAgent(deps.root, job.id, rec({ agentName: "api-x" }));
+      await closeAgents(deps, ["w3:p1@0-0"]);
+      const byName = Object.fromEntries(loadJob(deps.root, job.id).agents.map((x) => [x.agentName, x]));
+      expect(byName["api-x"]).toMatchObject({ status: "stopped", sessionId: "s1", lastCwd: "/new" });
+      expect(byName.older).toMatchObject({ status: "stopped", sessionId: "old", lastCwd: "/old" });
+    });
+  });
 });

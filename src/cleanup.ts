@@ -242,9 +242,11 @@ export async function closeAgents(
     const tab = tabs.find((t) => t.tab_id === a.tab_id);
     const wholeTab = !!tab && tab.pane_count <= 1;
 
-    let undo: (() => void) | undefined;
+    let undo: ((error: string) => void) | undefined;
     if (row.jobId) {
-      const rec = loadJob(d.root, row.jobId).agents.find((x) => x.paneId === a.pane_id || x.agentName === row.agentName);
+      const recs = loadJob(d.root, row.jobId).agents;
+      // The name is the record's identity; a pane id can be reused by a later agent.
+      const rec = recs.find((x) => x.agentName === row.agentName) ?? recs.find((x) => x.paneId === a.pane_id);
       if (rec) {
         const patch = { status: "stopped", lastCwd: a.cwd, ...(check.sessionId && { sessionId: check.sessionId }) };
         patchAgent(d.root, row.jobId, rec.agentName, patch);
@@ -254,15 +256,23 @@ export async function closeAgents(
           `cleanup closed ${row.agentName} (session ${check.sessionId ?? "none"}, folder ${a.cwd})`,
           d.now(),
         );
-        undo = () => patchAgent(d.root, row.jobId!, rec.agentName, { status: rec.status });
+        undo = (error) => {
+          // Put back what was there (an undefined field is dropped when the job is saved).
+          patchAgent(d.root, row.jobId!, rec.agentName, {
+            status: rec.status,
+            sessionId: rec.sessionId,
+            lastCwd: rec.lastCwd,
+          });
+          appendLog(d.root, row.jobId!, `cleanup could not close ${row.agentName}: ${error}`, d.now());
+        };
       }
     }
     try {
       if (wholeTab) await d.herdr.closeTab(a.tab_id);
       else await d.herdr.closePane(a.pane_id);
     } catch (e) {
+      undo?.(e instanceof Error ? e.message : String(e));
       if (!(e instanceof HerdrError)) throw e;
-      undo?.();
       refused.push({ pick, reason: `close failed: ${e.message}` });
       continue;
     }
