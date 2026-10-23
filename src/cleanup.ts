@@ -1,7 +1,7 @@
 import type { Deps } from "../orch";
 import { lastActivity, type Activity } from "./activity";
 import { OrchError } from "./errors";
-import type { AgentInfo } from "./herdr";
+import { HerdrError, type AgentInfo, type TabInfo } from "./herdr";
 import { listJobs } from "./jobs";
 import { buildStatus, type StatusRow } from "./status";
 
@@ -57,7 +57,7 @@ export const pickToken = (paneId: string, seq: number | undefined, activity: Act
 /**
  * Is this agent safe to close? Checks, in order: state is idle/done; its job isn't waiting on the user;
  * it has been inactive for at least `minIdleMs` (0 skips the threshold; unknown activity never fails it);
- * no child processes under the agent. Herdr is only asked about processes once the cheap checks pass.
+ * no child processes under the agent (if herdr can't say, that counts as a failure). Herdr is only asked about processes once the cheap checks pass.
  * `findDormant` and the close step both go through here, so they cannot disagree.
  */
 export async function checkAgent(
@@ -76,10 +76,17 @@ export async function checkAgent(
   const sessionId = a.agent_session?.value;
   const activity = sessionId ? lastActivity(d.claudeProjects, sessionId) : null;
   const idleMs = activity ? d.now().getTime() - activity.at.getTime() : null;
-  if (idleMs !== null && idleMs < minIdleMs) return { ok: false, reason: `active ${formatAge(idleMs)} ago` };
+  if (minIdleMs > 0 && idleMs !== null && idleMs < minIdleMs) {
+    return { ok: false, reason: `active ${formatAge(idleMs)} ago` };
+  }
 
-  for (const pid of await d.herdr.processPids(a.pane_id, a.agent)) {
-    if ((await d.children(pid)).length) return { ok: false, reason: "running child processes" };
+  try {
+    for (const pid of await d.herdr.processPids(a.pane_id, a.agent)) {
+      if ((await d.children(pid)).length) return { ok: false, reason: "running child processes" };
+    }
+  } catch (e) {
+    if (!(e instanceof HerdrError)) throw e;
+    return { ok: false, reason: "process info unavailable" }; // can't prove it's idle, so leave it open
   }
   return { ok: true, activity, idleMs, sessionId, token: pickToken(a.pane_id, a.state_change_seq, activity) };
 }
@@ -112,10 +119,18 @@ export async function findDormant(
   const rows = buildStatus(agents, d.reg, listJobs(d.root));
   const infoByPane = new Map(agents.map((a) => [a.pane_id, a]));
 
-  const tabs = new Map<string, Awaited<ReturnType<typeof d.herdr.listTabs>>>();
-  const paneCount = async (a: AgentInfo): Promise<number> => {
-    if (!tabs.has(a.workspace_id)) tabs.set(a.workspace_id, await d.herdr.listTabs(a.workspace_id));
-    return tabs.get(a.workspace_id)!.find((t) => t.tab_id === a.tab_id)?.pane_count ?? 1;
+  // null: herdr couldn't list this workspace's tabs
+  const tabs = new Map<string, TabInfo[] | null>();
+  const tabsOf = async (workspaceId: string): Promise<TabInfo[] | null> => {
+    if (!tabs.has(workspaceId)) {
+      try {
+        tabs.set(workspaceId, await d.herdr.listTabs(workspaceId));
+      } catch (e) {
+        if (!(e instanceof HerdrError)) throw e;
+        tabs.set(workspaceId, null);
+      }
+    }
+    return tabs.get(workspaceId)!;
   };
 
   const candidates: Candidate[] = [];
@@ -128,8 +143,15 @@ export async function findDormant(
       skipped.push({ agentName: row.agentName, paneId: row.paneId, workspace, reason: check.reason });
       continue;
     }
+    const workspaceTabs = await tabsOf(row.workspaceId);
+    if (!workspaceTabs) {
+      skipped.push({ agentName: row.agentName, paneId: row.paneId, workspace, reason: "tab info unavailable" });
+      continue;
+    }
+    // A tab we can't find is assumed shared: closing just the pane is the least destructive answer.
+    const tab = workspaceTabs.find((t) => t.tab_id === a.tab_id);
     const closes: Closes =
-      (await paneCount(a)) > 1 ? "pane" : byId.get(row.workspaceId)?.tab_count === 1 ? "tab+workspace" : "tab";
+      !tab || tab.pane_count > 1 ? "pane" : byId.get(row.workspaceId)?.tab_count === 1 ? "tab+workspace" : "tab";
     const c: Candidate = {
       agentName: row.agentName,
       kind: row.kind,

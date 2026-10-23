@@ -143,7 +143,15 @@ export class Herdr {
    */
   async processPids(paneId: string, name: string): Promise<number[]> {
     const r = await this.call(["pane", "process-info", "--pane", paneId]);
-    const procs: { pid: number; name: string }[] = r.process_info?.foreground_processes ?? [];
+    const procs: { pid: number; name: string }[] | undefined = r?.process_info?.foreground_processes;
+    if (!Array.isArray(procs)) {
+      throw new HerdrError(`herdr pane process-info returned no foreground_processes for ${paneId}`, [
+        "pane",
+        "process-info",
+        "--pane",
+        paneId,
+      ]);
+    }
     const named = procs.filter((p) => p.name === name);
     return (named.length ? named : procs).map((p) => p.pid);
   }

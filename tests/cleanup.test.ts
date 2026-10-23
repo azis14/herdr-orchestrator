@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { findDormant, formatAge } from "../src/cleanup";
 import { OrchError } from "../src/errors";
+import { HerdrError } from "../src/herdr";
 import { newJob, setStage, upsertAgent } from "../src/jobs";
 import { ok, testDeps, ws } from "./fakes";
 
@@ -37,6 +38,9 @@ interface World {
   tabs?: Record<string, object[]>;
   procs?: Record<string, { pid: number; name: string }[]>;
   read?: string;
+  /** Panes whose `pane process-info` fails. */
+  failProcs?: string[];
+  failTabs?: boolean;
 }
 
 function setup(w: World, overrides = {}) {
@@ -46,11 +50,15 @@ function setup(w: World, overrides = {}) {
       "workspace list": () =>
         ok({ workspaces: w.workspaces ?? [{ ...ws("w3", "shop2.0", 1), tab_count: 3 }] }),
       "tab list": (a) =>
-        ok({
+        w.failTabs
+          ? { code: 1, stderr: "tab list boom" }
+          : ok({
           tabs: w.tabs?.[a[3]] ?? [{ tab_id: "w3:t1", workspace_id: a[3], label: "t", pane_count: 1 }],
         }),
       "pane process-info": (a) =>
-        ok({ process_info: { pane_id: a[3], shell_pid: 1, foreground_processes: w.procs?.[a[3]] ?? [] } }),
+        w.failProcs?.includes(a[3])
+          ? { code: 1, stderr: "process-info boom" }
+          : ok({ process_info: { pane_id: a[3], shell_pid: 1, foreground_processes: w.procs?.[a[3]] ?? [] } }),
       "agent read": () => ({ stdout: w.read ?? "" }),
     },
     { now: () => NOW, ...overrides },
@@ -189,5 +197,91 @@ describe("findDormant", () => {
     const e = await findDormant(deps, { workspaces: ["nope"], idleMs: HOUR }).catch((e) => e);
     expect(e).toBeInstanceOf(OrchError);
     expect(e.message).toContain("shop2.0, devnotes");
+  });
+
+  test("design-review and integrate are skipped like plan-review", async () => {
+    const stages = ["design-review", "integrate"] as const;
+    const { deps } = setup({
+      agents: stages.map((st, i) => agent({ name: st, pane_id: `w3:p${i + 1}`, agent_session: session(`s-${st}`) })),
+    });
+    const ids: string[] = [];
+    stages.forEach((st, i) => {
+      writeSession(deps.claudeProjects, `s-${st}`, "2026-10-23T08:00:00Z");
+      const job = newJob(deps.root, deps.reg, { slug: `j${i}`, title: "T", request: "R", projects: ["shop-api"], now: NOW });
+      ids.push(job.id);
+      upsertAgent(deps.root, job.id, {
+        project: "shop-api", agent: "claude", agentName: st, workspaceId: "w3", tabId: "w3:t1",
+        paneId: `w3:p${i + 1}`, mode: "herdr-worktree", status: "started",
+      });
+      setStage(deps.root, job.id, st);
+    });
+    const r = await findDormant(deps, opts);
+    expect(r.candidates).toEqual([]);
+    expect(Object.fromEntries(r.skipped.map((s) => [s.agentName, s.reason]))).toEqual({
+      "design-review": `job ${ids[0]} waiting at design-review`,
+      integrate: `job ${ids[1]} waiting at integrate`,
+    });
+  });
+
+  test("an agent with a session but no transcript has unknown idleMs", async () => {
+    const { deps } = setup({ agents: [agent({ agent_session: session("ghost") })], read: "hello\n" });
+    const r = await findDormant(deps, opts);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0]).toMatchObject({ idleMs: null, sessionId: "ghost", pick: "w3:p1@0-0" });
+  });
+
+  test("a tab missing from tab list means closes pane", async () => {
+    const { deps } = setup({
+      agents: [agent({})],
+      workspaces: [{ ...ws("w3", "shop2.0", 1), tab_count: 1 }],
+      tabs: { w3: [{ tab_id: "w3:other", workspace_id: "w3", label: "x", pane_count: 1 }] },
+    });
+    expect((await findDormant(deps, opts)).candidates[0].closes).toBe("pane");
+  });
+
+  test("a threshold of 0 ignores a timestamp slightly in the future", async () => {
+    const { deps } = setup({ agents: [agent({ agent_session: session("skew") })] });
+    writeSession(deps.claudeProjects, "skew", "2026-10-23T12:00:30Z");
+    const r = await findDormant(deps, { workspaces: [], idleMs: 0 });
+    expect(r.skipped).toEqual([]);
+    expect(r.candidates).toHaveLength(1);
+    // with a real threshold the same agent is recent
+    const r2 = await findDormant(deps, opts);
+    expect(r2.skipped).toHaveLength(1);
+  });
+
+  test("process info failing for one agent skips it and the scan continues", async () => {
+    const { deps } = setup({
+      agents: [agent({ name: "bad", pane_id: "w3:p1" }), agent({ name: "good", pane_id: "w3:p2" })],
+      failProcs: ["w3:p1"],
+    });
+    const r = await findDormant(deps, opts);
+    expect(r.skipped).toEqual([
+      { agentName: "bad", paneId: "w3:p1", workspace: "shop2.0", reason: "process info unavailable" },
+    ]);
+    expect(r.candidates.map((c) => c.agentName)).toEqual(["good"]);
+  });
+
+  test("a children lookup that fails with HerdrError skips the agent too", async () => {
+    const { deps } = setup(
+      { agents: [agent({}) ], procs: { "w3:p1": [{ pid: 5, name: "claude" }] } },
+      { children: async () => { throw new HerdrError("boom", []); } },
+    );
+    const r = await findDormant(deps, opts);
+    expect(r.candidates).toEqual([]);
+    expect(r.skipped[0].reason).toBe("process info unavailable");
+  });
+
+  test("tab list failing skips that workspace's candidates and the scan continues", async () => {
+    const { deps } = setup({
+      workspaces: [{ ...ws("w3", "shop2.0", 1), tab_count: 2 }],
+      agents: [agent({ name: "a" })],
+      failTabs: true,
+    });
+    const r = await findDormant(deps, opts);
+    expect(r.candidates).toEqual([]);
+    expect(r.skipped).toEqual([
+      { agentName: "a", paneId: "w3:p1", workspace: "shop2.0", reason: "tab info unavailable" },
+    ]);
   });
 });

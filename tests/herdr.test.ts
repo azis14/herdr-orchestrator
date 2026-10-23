@@ -118,6 +118,14 @@ describe("Herdr", () => {
     expect(await new Herdr(run).processPids("w3:p1", "cursor")).toEqual([20, 21]);
   });
 
+  test("processPids throws when the reply has no foreground_processes", async () => {
+    const run = fakeRunner({ "pane process-info": () => ok({ process_info: { pane_id: "w3:p1" } }) });
+    const e = await new Herdr(run).processPids("w3:p1", "claude").catch((e) => e);
+    expect(e).toBeInstanceOf(HerdrError);
+    const run2 = fakeRunner({ "pane process-info": () => ok({}) });
+    expect(await new Herdr(run2).processPids("w3:p1", "claude").catch((e) => e)).toBeInstanceOf(HerdrError);
+  });
+
   test("readAgent returns raw stdout and throws HerdrError on failure", async () => {
     const run = fakeRunner({ "agent read": (a) => (a[2] === "gone" ? { code: 1, stderr: "no such pane" } : { stdout: "line 1\nline 2\n" }) });
     const h = new Herdr(run);
