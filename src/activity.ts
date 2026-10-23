@@ -3,7 +3,7 @@ import path from "node:path";
 
 export interface Activity {
   at: Date;
-  /** First non-empty line of the agent's last text reply in the main transcript. */
+  /** Last non-empty line of the agent's last text reply in the main transcript (where a closing question shows up). */
   lastMessage?: string;
 }
 
@@ -49,11 +49,11 @@ function newest(entries: Entry[]): number | null {
   return max;
 }
 
-function firstLine(text: string): string | undefined {
+function lastLine(text: string): string | undefined {
   return text
     .split("\n")
     .map((l) => l.trim())
-    .find((l) => l);
+    .findLast((l) => l);
 }
 
 function lastMessage(entries: Entry[]): string | undefined {
@@ -64,7 +64,7 @@ function lastMessage(entries: Entry[]): string | undefined {
     for (let j = blocks.length - 1; j >= 0; j--) {
       const b = blocks[j];
       if (b?.type !== "text" || typeof b.text !== "string") continue;
-      const line = firstLine(b.text);
+      const line = lastLine(b.text);
       if (line) return line;
     }
   }

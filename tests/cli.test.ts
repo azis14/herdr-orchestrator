@@ -198,10 +198,10 @@ describe("cli cleanup", () => {
     expect(await main(["cleanup"], deps)).toBe(0);
     const lines = out.join("\n").split("\n");
     expect(lines[0].split(/\s+/)).toEqual(["AGENT", "WORKSPACE", "IDLE", "JOB", "CLOSES", "PICK"]);
-    expect(lines[1].split(/\s+/)).toEqual(["idle2h", "shop2.0", "2h", "-", "tab", pick2]);
-    expect(lines[2]).toBe('  "Which one?"');
-    expect(lines[3].split(/\s+/)).toEqual(["idle3h", "shop2.0", "3h", "-", "tab", pick3]);
-    expect(lines[4]).toBe('  "Shipped it."');
+    expect(lines[1].split(/\s+/)).toEqual(["idle3h", "shop2.0", "3h", "-", "tab", pick3]);
+    expect(lines[2]).toBe('  "Shipped it."');
+    expect(lines[3].split(/\s+/)).toEqual(["idle2h", "shop2.0", "2h", "-", "tab", pick2]);
+    expect(lines[4]).toBe('  "Which one?"');
     expect(lines.at(-1)).toBe(
       "note: scheduled wakeups, /loop and Monitor waits can't be detected; check before approving.",
     );
@@ -299,6 +299,37 @@ describe("cli cleanup", () => {
     expect(j.candidates.map((c: { pick: string }) => c.pick)).toEqual([pick3]);
     expect(j.candidates[0]).toMatchObject({ agentName: "idle3h", workspace: "shop2.0", idleMs: 3 * HOUR, closes: "tab" });
     expect(j.skipped).toMatchObject([{ agentName: "idle2h", reason: "active 2h ago" }]);
+  });
+
+  test("a long last message is cut from the front to 100 characters; --json keeps it all", async () => {
+    const { deps, out } = setup();
+    const long = `${"x".repeat(150)} so which do you want?`;
+    writeSession(deps.claudeProjects, "s3", at(3), long);
+    expect(await main(["cleanup"], deps)).toBe(0);
+    const shown = out.join("\n").split("\n").find((l) => l.includes("so which"))!;
+    expect(shown).toBe(`  "…${long.slice(-99)}"`);
+    expect(shown.length).toBe(2 + 1 + 100 + 1);
+    out.length = 0;
+    expect(await main(["cleanup", "--json"], deps)).toBe(0);
+    expect(JSON.parse(out.join("\n")).candidates[0].lastMessage).toBe(long);
+  });
+
+  test("a message of exactly 100 characters is not cut", async () => {
+    const { deps, out } = setup();
+    writeSession(deps.claudeProjects, "s3", at(3), "y".repeat(100));
+    expect(await main(["cleanup"], deps)).toBe(0);
+    expect(out.join("\n")).toContain(`  "${"y".repeat(100)}"`);
+  });
+
+  test("rows are oldest first, with unknown ages last", async () => {
+    const { deps, out } = setup();
+    fs.rmSync(path.join(deps.claudeProjects, "-proj", "s3.jsonl")); // idle3h now has no transcript
+    expect(await main(["cleanup"], deps)).toBe(0);
+    const rows = out.join("\n").split("\n").filter((l) => /^idle/.test(l)).map((l) => l.split(/\s+/)[0]);
+    expect(rows).toEqual(["idle2h", "idle3h"]);
+    const { deps: d2, out: o2 } = setup();
+    await main(["cleanup"], d2);
+    expect(o2.join("\n").split("\n").filter((l) => /^idle/.test(l)).map((l) => l.split(/\s+/)[0])).toEqual(["idle3h", "idle2h"]);
   });
 
   test("an agent with no transcript shows IDLE unknown", async () => {

@@ -179,11 +179,18 @@ export async function findDormant(
     if (lastMessage) c.lastMessage = lastMessage;
     candidates.push(c);
   }
+  // Oldest first, unknown ages last (sort is stable, so ties keep the agent-name order).
+  candidates.sort((a, b) => (b.idleMs ?? -1) - (a.idleMs ?? -1));
   return { candidates, skipped };
 }
 
 export const CLEANUP_NOTE =
   "note: scheduled wakeups, /loop and Monitor waits can't be detected; check before approving.";
+
+const MESSAGE_CAP = 100;
+
+/** Cap a message for the table, eliding from the front: the end (is it a question?) is what the user needs. */
+const tail = (m: string) => (m.length > MESSAGE_CAP ? `…${m.slice(-(MESSAGE_CAP - 1))}` : m);
 
 /** The `orch cleanup` listing: a table with each agent's last message under it, then what was skipped, then a caveat. */
 export function formatDormant(r: { candidates: Candidate[]; skipped: Skipped[] }): string {
@@ -206,7 +213,7 @@ export function formatDormant(r: { candidates: Candidate[]; skipped: Skipped[] }
     lines.push(row(table[0]));
     r.candidates.forEach((c, i) => {
       lines.push(row(table[i + 1]));
-      if (c.lastMessage) lines.push(`  "${c.lastMessage}"`);
+      if (c.lastMessage) lines.push(`  "${tail(c.lastMessage)}"`);
     });
   }
   if (r.skipped.length) {

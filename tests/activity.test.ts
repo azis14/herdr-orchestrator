@@ -33,20 +33,28 @@ describe("lastActivity", () => {
     fs.utimesSync(file, now, now);
     const a = lastActivity(projects, "s1");
     expect(a?.at.toISOString()).toBe("2026-10-22T10:05:01.000Z");
-    expect(a?.lastMessage).toBe("Done.");
+    expect(a?.lastMessage).toBe("more");
   });
 
-  test("lastMessage is the first non-empty line of the last assistant text block", () => {
+  test("lastMessage is the last non-empty line of the last assistant text block", () => {
     const projects = tmp();
     writeLines(projects, "-home-x-repo/s1.jsonl", [
       user("2026-10-22T10:00:00.000Z"),
       assistant("2026-10-22T10:01:00.000Z", [text("Older text")]),
-      assistant("2026-10-22T10:02:00.000Z", [text("\n\n  Working on it\nsecond line")]),
+      assistant("2026-10-22T10:02:00.000Z", [text("\n\n  Done.\nWorking on it\n\n")]),
       assistant("2026-10-22T10:03:00.000Z", [{ type: "thinking", thinking: "hmm" }, { type: "tool_use", name: "Bash" }]),
     ]);
     const a = lastActivity(projects, "s1");
     expect(a?.at.toISOString()).toBe("2026-10-22T10:03:00.000Z");
     expect(a?.lastMessage).toBe("Working on it");
+  });
+
+  test("lastMessage keeps a closing question after a longer reply", () => {
+    const projects = tmp();
+    writeLines(projects, "-home-x-repo/s1.jsonl", [
+      assistant("2026-10-22T10:00:00.000Z", [text("Found two options.\n\nWhich do you want?\n")]),
+    ]);
+    expect(lastActivity(projects, "s1")?.lastMessage).toBe("Which do you want?");
   });
 
   test("includes subagent transcripts", () => {

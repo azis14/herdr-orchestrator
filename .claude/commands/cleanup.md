@@ -6,7 +6,7 @@ allowed-tools: Bash(bun /home/user/orchestrator/orch.ts cleanup:*)
 
 Run `bun /home/user/orchestrator/orch.ts cleanup $ARGUMENTS` and show the table and the skipped block. This only lists; nothing is closed yet.
 
-Flag any candidate whose last message ends with `?` (it may be waiting on an answer) or whose IDLE shows `unknown` (no transcript, so its age can't be confirmed). Repeat the note at the bottom: scheduled wakeups, `/loop` and Monitor waits can't be detected.
+Flag any candidate whose last message ends with a question mark (it may be waiting on an answer) or whose IDLE shows `unknown` (no transcript, so its age can't be confirmed). Repeat the note at the bottom: scheduled wakeups, `/loop` and Monitor waits can't be detected.
 
 Ask the user which to close: all, some by agent name, or none. Wait for the answer. Never run `--close` without it.
 

@@ -95,6 +95,20 @@ describe("findDormant", () => {
     expect(c).toMatchObject({ paneId: "w3:pF", workspace: "shop2.0", sessionId: "s1", project: null, closes: "tab" });
   });
 
+  test("candidates are ordered oldest first, unknown last", async () => {
+    const { deps } = setup({
+      agents: [
+        agent({ name: "a-none", pane_id: "w3:p1", agent_session: session("s-none") }),
+        agent({ name: "b-2h", pane_id: "w3:p2", agent_session: session("s-2h") }),
+        agent({ name: "c-5h", pane_id: "w3:p3", agent_session: session("s-5h") }),
+      ],
+    });
+    writeSession(deps.claudeProjects, "s-2h", "2026-10-23T10:00:00Z");
+    writeSession(deps.claudeProjects, "s-5h", "2026-10-23T07:00:00Z");
+    const r = await findDormant(deps, opts);
+    expect(r.candidates.map((c) => c.agentName)).toEqual(["c-5h", "b-2h", "a-none"]);
+  });
+
   test("skips recent, busy, blocked and review-stage agents", async () => {
     const { deps } = setup({
       agents: [
