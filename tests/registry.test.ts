@@ -37,6 +37,9 @@ describe("registry", () => {
     expect(reg.projects.map((p) => p.name)).toEqual(["shop2.0", "shop-api", "shop-ui"]);
     expect(reg.agents.map((a) => a.name)).toEqual(["claude", "cursor"]);
     expect(reg.defaultAgent).toBe("claude");
+    // job agents: Cursor runs everything and skips the workspace-trust dialog (new worktrees are untrusted)
+    expect(reg.agents.find((a) => a.name === "cursor")!.jobArgs).toEqual(["--force", "--trust"]);
+    expect(reg.agents.every((a) => a.openArgs.length === 0)).toBe(true);
   });
 
   test("getProject unknown name lists known names", () => {
