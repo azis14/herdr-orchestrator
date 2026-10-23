@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
+import path from "node:path";
 import { parseArgs } from "node:util";
 import { OrchError } from "./src/errors";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { openProject } from "./src/open";
-import { loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
+import { addProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
 import { spawnJobAgent } from "./src/spawn";
 import { buildStatus, formatStatus } from "./src/status";
@@ -27,6 +28,8 @@ const USAGE = `usage: bun orch.ts <command>
 
   open <project> [agent]         open an agent in a new tab of the project's workspace
   status [--json]                every agent across workspaces, by project and job
+  project add <path> --description D [--name N] [--context a,b,c]
+                                 register a repo as a project
   skills [project] [--resolve <skill>] [--json]
                                  list orchestrator or repo skills; resolve which copy an agent uses
   job new <slug> --title T --request R --projects a,b
@@ -55,6 +58,28 @@ const commands: Record<string, Command> = {
     const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
     const rows = buildStatus(await deps.herdr.listAgents(), deps.reg, listJobs(deps.root));
     deps.out(values.json ? JSON.stringify(rows, null, 2) : formatStatus(rows));
+    return 0;
+  },
+
+  async project(args, deps) {
+    const [sub, ...rest] = args;
+    if (sub !== "add") throw new OrchError("usage: project add <path> --description D [--name N] [--context a,b,c]");
+    const { positionals, values } = parseArgs({
+      args: rest,
+      allowPositionals: true,
+      options: { name: { type: "string" }, description: { type: "string" }, context: { type: "string" } },
+    });
+    const need = (v: string | undefined, what: string) => {
+      if (!v) throw new OrchError(`project add: missing ${what}`);
+      return v;
+    };
+    const p = addProject(path.join(deps.root, "registry"), deps.reg, {
+      path: need(positionals[0], "<path>"),
+      name: values.name,
+      description: need(values.description, "--description"),
+      context: (values.context ?? "").split(",").map((c) => c.trim()).filter(Boolean),
+    });
+    deps.out(JSON.stringify(p, null, 2));
     return 0;
   },
 
