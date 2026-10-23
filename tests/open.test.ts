@@ -19,6 +19,15 @@ function runner(workspaces: unknown[], extra: Record<string, FakeHandler> = {}, 
 const callsOf = (run: { calls: string[][] }, key: string) => run.calls.filter((c) => c.slice(0, 2).join(" ") === key);
 
 describe("openProject", () => {
+  test("cwd opens the tab there", async () => {
+    const reg = testRegistry();
+    const run = runner([ws("w5", "shop-api", 2)]);
+    await openProject(new Herdr(run), reg, "shop-api", undefined, { cwd: "/some/where" });
+    expect(callsOf(run, "tab create")[0]).toEqual([
+      "tab", "create", "--workspace", "w5", "--cwd", "/some/where", "--no-focus",
+    ]);
+  });
+
   test("existing workspace gets a new tab", async () => {
     const reg = testRegistry();
     const p = reg.projects[0].path;

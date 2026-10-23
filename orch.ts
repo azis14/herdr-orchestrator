@@ -265,7 +265,12 @@ const commands: Record<string, Command> = {
           repoWorktree: values["repo-worktree"] ?? false,
           trust: values.trust ?? false,
         });
-        deps.out(`spawned ${a.agentName} (${a.agent}, ${a.mode}) pane ${a.paneId}`);
+        const how = a.resumedSession
+          ? ` resumed session ${a.resumedSession}`
+          : a.resumedFresh
+            ? " (fresh: no session to resume)"
+            : "";
+        deps.out(`spawned ${a.agentName} (${a.agent}, ${a.mode}) pane ${a.paneId}${how}`);
         return 0;
       }
       default:

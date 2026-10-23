@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { main, type GitRunner } from "../orch";
 import { OrchError } from "../src/errors";
-import { loadJob, newJob, patchAgent } from "../src/jobs";
+import { loadJob, newJob, patchAgent, upsertAgent, type JobAgent } from "../src/jobs";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { jobAgentName, spawnJobAgent } from "../src/spawn";
 import { ok, testDeps, ws, type FakeHandler } from "./fakes";
 
@@ -223,5 +225,133 @@ describe("spawnJobAgent", () => {
     expect(a).toMatchObject({ status: "started", paneId: "w8:p1" });
     expect(gitCalls).toEqual([]);
     expect(run.calls.slice(callsBefore).map((c) => c.slice(0, 2).join(" "))).toEqual(["agent list"]);
+  });
+});
+
+describe("resuming a cleaned-up agent", () => {
+  const o = { repoWorktree: false, trust: false };
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "orch-resume-"));
+
+  /** A job agent record as `orch cleanup --close` leaves it. */
+  function stopped(
+    t: ReturnType<typeof setup>,
+    over: Partial<JobAgent>,
+    agent = "claude",
+  ): JobAgent {
+    const record: JobAgent = {
+      project: "shop-api",
+      agent,
+      agentName: jobAgentName("shop-api", t.job.id),
+      workspaceId: "w1",
+      tabId: "w1:t1",
+      paneId: "w1:p1",
+      mode: "herdr-worktree",
+      createdWorkspace: true,
+      status: "stopped",
+      ...over,
+    };
+    upsertAgent(t.deps.root, t.job.id, record);
+    return record;
+  }
+
+  const placed = {
+    "workspace create": () =>
+      ok({ workspace: { workspace_id: "w9" }, tab: { tab_id: "w9:t1" }, root_pane: { pane_id: "w9:p1" } }),
+  };
+
+  test("resumes a stopped agent in its job worktree", async () => {
+    const t = setup(placed);
+    const wt = tmp();
+    stopped(t, { worktreePath: wt, branch: "feature/x", lastCwd: wt, sessionId: "S1" });
+    const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o);
+    expect(call(t.run, "workspace create")).toEqual([
+      "workspace", "create", "--cwd", wt, "--label", "shop-api:20261023-x", "--no-focus",
+    ]);
+    expect(call(t.run, "agent start")).toEqual([
+      "agent", "start", jobAgentName("shop-api", t.job.id), "--kind", "claude", "--pane", "w9:p1", "--", "--resume", "S1",
+    ]);
+    expect(a.resumedSession).toBe("S1");
+    const saved = loadJob(t.deps.root, t.job.id).agents[0];
+    expect(saved).toMatchObject({ status: "started", paneId: "w9:p1", worktreePath: wt, createdWorkspace: true });
+    expect(saved).not.toHaveProperty("lastCwd");
+    expect(saved).not.toHaveProperty("sessionId");
+    expect(saved).not.toHaveProperty("resumedSession");
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test("resumes a repo-worktree agent in its own folder without worktreeArgs", async () => {
+    const t = setup();
+    const wt = tmp();
+    const own = tmp();
+    stopped(t, { agent: "cursor", mode: "repo-worktree", worktreePath: wt, lastCwd: own, sessionId: "S1" }, "cursor");
+    const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", "cursor", o);
+    expect(call(t.run, "tab create")).toEqual([
+      "tab", "create", "--workspace", "w5", "--cwd", own, "--label", jobAgentName("shop-api", t.job.id), "--no-focus",
+    ]);
+    const start = call(t.run, "agent start")!;
+    expect(start.slice(start.indexOf("--"))).toEqual(["--", "--force", "--resume", "S1"]);
+    expect(start).not.toContain("--trust");
+    expect(a.resumedSession).toBe("S1");
+    expect(call(t.run, "workspace create")).toBeUndefined();
+    const saved = loadJob(t.deps.root, t.job.id).agents[0];
+    expect(saved).toMatchObject({ status: "started", paneId: "w5:p9", mode: "repo-worktree" });
+    expect(saved).not.toHaveProperty("lastCwd");
+    expect(saved).not.toHaveProperty("sessionId");
+    fs.rmSync(wt, { recursive: true });
+    fs.rmSync(own, { recursive: true });
+  });
+
+  test("starts fresh when no session was recorded", async () => {
+    const t = setup(placed);
+    const wt = tmp();
+    stopped(t, { worktreePath: wt, lastCwd: wt });
+    const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o);
+    expect(call(t.run, "agent start")).not.toContain("--resume");
+    expect(a.resumedSession).toBeUndefined();
+    expect(loadJob(t.deps.root, t.job.id).agents[0]).not.toHaveProperty("lastCwd");
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test("keeps lastCwd and sessionId after a failed start", async () => {
+    const t = setup({
+      ...placed,
+      "agent start": () => ({ code: 1, stderr: { error: { code: "agent_not_ready", message: "blocked" } } }),
+    });
+    const wt = tmp();
+    stopped(t, { worktreePath: wt, lastCwd: wt, sessionId: "S1" });
+    await expect(spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o)).rejects.toThrow(OrchError);
+    expect(loadJob(t.deps.root, t.job.id).agents[0]).toMatchObject({
+      status: "start-failed",
+      lastCwd: wt,
+      sessionId: "S1",
+    });
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test("falls back to the recorded worktree when lastCwd no longer exists", async () => {
+    const t = setup(placed);
+    const wt = tmp();
+    stopped(t, { worktreePath: wt, lastCwd: path.join(wt, "gone"), sessionId: "S1" });
+    const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o);
+    expect(call(t.run, "workspace create")![3]).toBe(wt);
+    expect(call(t.run, "agent start")).not.toContain("--resume");
+    expect(a.resumedSession).toBeUndefined();
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test("cli job spawn reports the resumed session, or that it started fresh", async () => {
+    const t = setup(placed);
+    const wt = tmp();
+    const rec = stopped(t, { worktreePath: wt, lastCwd: wt, sessionId: "S1" });
+    expect(await main(["job", "spawn", t.job.id, "shop-api"], t.deps)).toBe(0);
+    expect(t.out.pop()).toBe(
+      `spawned ${rec.agentName} (claude, herdr-worktree) pane w9:p1 resumed session S1`,
+    );
+    stopped(t, { worktreePath: wt, lastCwd: wt });
+    expect(await main(["job", "spawn", t.job.id, "shop-api"], t.deps)).toBe(0);
+    expect(t.out.pop()).toBe(
+      `spawned ${rec.agentName} (claude, herdr-worktree) pane w9:p1 (fresh: no session to resume)`,
+    );
+    fs.rmSync(wt, { recursive: true });
   });
 });

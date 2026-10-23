@@ -85,19 +85,19 @@ export async function openTerminal(
 
 /**
  * Open an agent on a project: a new tab in the project's workspace, creating the workspace if needed.
- * The agent is named after its kind (`claude`, `claude-2`, ...). `topic` labels the tab; without it herdr's default stays.
+ * `cwd` defaults to the project's path. The agent is named after its kind (`claude`, `claude-2`, ...). `topic` labels the tab; without it herdr's default stays.
  */
 export async function openProject(
   h: Herdr,
   reg: Registry,
   project: string,
   agent?: string,
-  o: { args?: string[]; name?: string; topic?: string } = {},
+  o: { args?: string[]; name?: string; topic?: string; cwd?: string } = {},
 ): Promise<OpenResult> {
   const p = getProject(reg, project);
   const a = getAgent(reg, agent, p);
   const name = o.name ?? nextAgentName(a.name, await h.listAgents());
-  const { placement, createdWorkspace } = await placeTab(h, p.path, p.name, o.topic);
+  const { placement, createdWorkspace } = await placeTab(h, o.cwd ?? p.path, p.name, o.topic);
 
   try {
     if (createdWorkspace && o.topic) await h.renameTab(placement.tabId, o.topic);

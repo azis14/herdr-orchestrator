@@ -34,8 +34,8 @@ export function testRegistry(names: string[] = ["shop-api", "shop-ui"]): Registr
   return {
     defaultAgent: "claude",
     agents: [
-      { name: "claude", kind: "claude", openArgs: [], jobArgs: [] },
-      { name: "cursor", kind: "cursor", openArgs: [], jobArgs: ["--force"], worktreeArgs: ["--trust"] },
+      { name: "claude", kind: "claude", openArgs: [], jobArgs: [], resumeArgs: ["--resume", "{session}"] },
+      { name: "cursor", kind: "cursor", openArgs: [], jobArgs: ["--force"], worktreeArgs: ["--trust"], resumeArgs: ["--resume", "{session}"] },
     ],
     projects: names.map((name) => ({
       name,

@@ -24,6 +24,8 @@ export interface AgentDef {
   jobArgs: string[];
   /** Extra args only when the agent runs in a job-created worktree (e.g. Cursor `--trust`), never the user's checkout. */
   worktreeArgs?: string[];
+  /** Args to resume a session; "{session}" is replaced by the id. */
+  resumeArgs?: string[];
 }
 
 export interface Registry {
