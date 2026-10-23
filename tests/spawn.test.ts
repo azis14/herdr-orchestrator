@@ -308,6 +308,7 @@ describe("resuming a cleaned-up agent", () => {
     const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o);
     expect(call(t.run, "agent start")).not.toContain("--resume");
     expect(a.resumedSession).toBeUndefined();
+    expect(a.resumedFresh).toBe(true);
     expect(loadJob(t.deps.root, t.job.id).agents[0]).not.toHaveProperty("lastCwd");
     fs.rmSync(wt, { recursive: true });
   });
@@ -336,7 +337,50 @@ describe("resuming a cleaned-up agent", () => {
     expect(call(t.run, "workspace create")![3]).toBe(wt);
     expect(call(t.run, "agent start")).not.toContain("--resume");
     expect(a.resumedSession).toBeUndefined();
+    expect(a.resumedFresh).toBe(true);
+    expect(loadJob(t.deps.root, t.job.id).agents[0]).not.toHaveProperty("lastCwd");
     fs.rmSync(wt, { recursive: true });
+  });
+
+  test("a session with no resumeArgs on the agent starts fresh", async () => {
+    const t = setup(placed);
+    t.deps.reg.agents.find((x) => x.name === "claude")!.resumeArgs = undefined;
+    const wt = tmp();
+    stopped(t, { worktreePath: wt, lastCwd: wt, sessionId: "S1" });
+    const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o);
+    expect(call(t.run, "agent start")).not.toContain("--resume");
+    expect(a.resumedSession).toBeUndefined();
+    expect(a.resumedFresh).toBe(true);
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test.each([
+    ["a trailing slash", (wt: string) => `${wt}/`],
+    ["a subdirectory", (wt: string) => path.join(wt, "src")],
+  ])("lastCwd with %s still counts as the job worktree", async (_name, toCwd) => {
+    const t = setup(placed);
+    const wt = tmp();
+    fs.mkdirSync(path.join(wt, "src"));
+    const cwd = toCwd(wt);
+    stopped(t, { agent: "cursor", worktreePath: wt, lastCwd: cwd, sessionId: "S1" }, "cursor");
+    await spawnJobAgent(t.deps, t.job.id, "shop-api", "cursor", o);
+    expect(call(t.run, "workspace create")![3]).toBe(cwd);
+    expect(call(t.run, "tab create")).toBeUndefined();
+    const start = call(t.run, "agent start")!;
+    expect(start.slice(start.indexOf("--"))).toEqual(["--", "--force", "--trust", "--resume", "S1"]);
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test("a sibling folder that merely shares the worktree's prefix is not the job worktree", async () => {
+    const t = setup();
+    const wt = tmp();
+    const sibling = `${wt}-other`;
+    fs.mkdirSync(sibling);
+    stopped(t, { agent: "cursor", mode: "repo-worktree", worktreePath: wt, lastCwd: sibling, sessionId: "S1" }, "cursor");
+    await spawnJobAgent(t.deps, t.job.id, "shop-api", "cursor", o);
+    expect(call(t.run, "agent start")).not.toContain("--trust");
+    fs.rmSync(wt, { recursive: true });
+    fs.rmSync(sibling, { recursive: true });
   });
 
   test("cli job spawn reports the resumed session, or that it started fresh", async () => {

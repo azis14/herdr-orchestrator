@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { OrchError } from "./errors";
 import type { GitRunner } from "./git";
 import type { Herdr, Placement } from "./herdr";
@@ -17,6 +18,13 @@ export type SpawnResult = JobAgent & {
   /** The agent reopened in its `lastCwd` but had no session to resume. */
   resumedFresh?: true;
 };
+
+/** Whether `cwd` is the job worktree itself or a folder inside it (compared by resolved path). */
+function insideWorktree(cwd: string, worktreePath?: string): boolean {
+  if (!worktreePath) return false;
+  const rel = path.relative(path.resolve(worktreePath), path.resolve(cwd));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
 
 /** Statuses after which `job spawn` may start the agent again. */
 const RESTARTABLE = ["stopped", "start-failed"];
@@ -105,7 +113,7 @@ export async function spawnJobAgent(
         ? a.resumeArgs.map((x) => x.replaceAll("{session}", existing.sessionId!))
         : [];
     const note = resume.length ? { resumedSession: existing.sessionId! } : { resumedFresh: true as const };
-    if (cwd === existing.worktreePath) {
+    if (insideWorktree(cwd, existing.worktreePath)) {
       const placement = await deps.herdr.createWorkspace(cwd, `${p.name}:${jobId}`);
       const started = await start(
         { ...base, mode: existing.mode, ...placement, createdWorkspace: true, status: "starting" },
@@ -132,24 +140,34 @@ export async function spawnJobAgent(
     return { ...saved, ...note };
   }
 
+  // From here on the conversation cannot be resumed. If cleanup recorded a `lastCwd` that is gone, say so.
+  const fresh = existing?.lastCwd ? { resumedFresh: true as const } : {};
+
   // Respawn into a worktree the job already has.
   if (existing?.worktreePath && fs.existsSync(existing.worktreePath)) {
     const placement = await deps.herdr.createWorkspace(existing.worktreePath, `${p.name}:${jobId}`);
-    return start({ ...base, mode: existing.mode, ...placement, createdWorkspace: true, status: "starting" }, worktreeArgs);
+    const started = await start(
+      { ...base, mode: existing.mode, ...placement, createdWorkspace: true, status: "starting" },
+      worktreeArgs,
+    );
+    return { ...started, ...fresh };
   }
 
   if (o.repoWorktree) {
     // The user's own checkout: never pass worktree-only args (Cursor --trust would persist trust for it).
     const r = await openProject(deps.herdr, deps.reg, p.name, a.name, { args: a.jobArgs, name: agentName, topic: agentName });
-    return saveLive({
-      ...base,
-      mode: "repo-worktree",
-      workspaceId: r.workspaceId,
-      tabId: r.tabId,
-      paneId: r.paneId,
-      createdWorkspace: r.createdWorkspace,
-      status: "started",
-    });
+    return {
+      ...saveLive({
+        ...base,
+        mode: "repo-worktree",
+        workspaceId: r.workspaceId,
+        tabId: r.tabId,
+        paneId: r.paneId,
+        createdWorkspace: r.createdWorkspace,
+        status: "started",
+      }),
+      ...fresh,
+    };
   }
 
   const fetched = await deps.git(p.path, ["fetch", BASE_REMOTE, BASE_BRANCH]);
@@ -166,8 +184,9 @@ export async function spawnJobAgent(
     label: `${p.name}:${jobId}`,
     trust: o.trust,
   });
-  return start(
+  const started = await start(
     { ...base, mode: "herdr-worktree", ...placement, worktreePath, branch, createdWorkspace: true, status: "starting" },
     worktreeArgs,
   );
+  return { ...started, ...fresh };
 }
