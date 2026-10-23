@@ -2,7 +2,7 @@ import type { Deps } from "../orch";
 import { lastActivity, type Activity } from "./activity";
 import { OrchError } from "./errors";
 import { HerdrError, type AgentInfo, type TabInfo } from "./herdr";
-import { listJobs } from "./jobs";
+import { appendLog, listJobs, loadJob, patchAgent } from "./jobs";
 import { buildStatus, type StatusRow } from "./status";
 
 export type CleanupDeps = Pick<Deps, "herdr" | "reg" | "root" | "claudeProjects" | "children" | "now">;
@@ -173,4 +173,125 @@ export async function findDormant(
     candidates.push(c);
   }
   return { candidates, skipped };
+}
+
+export interface Closed {
+  agentName: string;
+  paneId: string;
+  workspace: string;
+  closed: Closes;
+  jobId?: string;
+}
+
+export interface Refused {
+  pick: string;
+  reason: string;
+}
+
+/**
+ * Close the agents the user approved (`pick` strings from `findDormant`). Each is re-checked against live state first,
+ * the same way `findDormant` checks it minus the idle threshold; one that fails is refused and the rest still go.
+ * A job agent is recorded as stopped (with its session and folder) before its pane closes. A workspace is closed
+ * once, after all its agents, and only if no tabs are left in it.
+ */
+export async function closeAgents(
+  d: CleanupDeps,
+  picks: string[],
+): Promise<{ closed: Closed[]; refused: Refused[] }> {
+  const closed: Closed[] = [];
+  const refused: Refused[] = [];
+  const agents = await d.herdr.listAgents();
+  const labelOf = new Map((await d.herdr.listWorkspaces()).map((w) => [w.workspace_id, w.label]));
+  const rows = buildStatus(agents, d.reg, listJobs(d.root));
+  const done = new Set<string>();
+  const tabClosed = new Map<string, Closed[]>(); // workspace id -> agents whose whole tab closed
+
+  for (const pick of picks) {
+    const at = pick.lastIndexOf("@");
+    if (at < 1 || at === pick.length - 1) {
+      refused.push({ pick, reason: "bad pick" });
+      continue;
+    }
+    const paneId = pick.slice(0, at);
+    const a = agents.find((x) => x.pane_id === paneId);
+    const row = rows.find((r) => r.paneId === paneId);
+    if (!a || !row || done.has(paneId)) {
+      refused.push({ pick, reason: "gone" });
+      continue;
+    }
+    const check = await checkAgent(d, a, row, 0);
+    if (!check.ok) {
+      refused.push({ pick, reason: check.reason });
+      continue;
+    }
+    if (check.token !== pick) {
+      refused.push({ pick, reason: "changed since listing" });
+      continue;
+    }
+
+    // Fresh every time: an earlier pick may have closed a sibling pane in this tab.
+    let tabs: TabInfo[];
+    try {
+      tabs = await d.herdr.listTabs(a.workspace_id);
+    } catch (e) {
+      if (!(e instanceof HerdrError)) throw e;
+      refused.push({ pick, reason: "tab info unavailable" });
+      continue;
+    }
+    // A tab we can't find is assumed shared: closing just the pane is the least destructive answer.
+    const tab = tabs.find((t) => t.tab_id === a.tab_id);
+    const wholeTab = !!tab && tab.pane_count <= 1;
+
+    let undo: (() => void) | undefined;
+    if (row.jobId) {
+      const rec = loadJob(d.root, row.jobId).agents.find((x) => x.paneId === a.pane_id || x.agentName === row.agentName);
+      if (rec) {
+        const patch = { status: "stopped", lastCwd: a.cwd, ...(check.sessionId && { sessionId: check.sessionId }) };
+        patchAgent(d.root, row.jobId, rec.agentName, patch);
+        appendLog(
+          d.root,
+          row.jobId,
+          `cleanup closed ${row.agentName} (session ${check.sessionId ?? "none"}, folder ${a.cwd})`,
+          d.now(),
+        );
+        undo = () => patchAgent(d.root, row.jobId!, rec.agentName, { status: rec.status });
+      }
+    }
+    try {
+      if (wholeTab) await d.herdr.closeTab(a.tab_id);
+      else await d.herdr.closePane(a.pane_id);
+    } catch (e) {
+      if (!(e instanceof HerdrError)) throw e;
+      undo?.();
+      refused.push({ pick, reason: `close failed: ${e.message}` });
+      continue;
+    }
+    done.add(paneId);
+    const c: Closed = {
+      agentName: row.agentName,
+      paneId,
+      workspace: labelOf.get(a.workspace_id) ?? a.workspace_id,
+      closed: wholeTab ? "tab" : "pane",
+    };
+    if (row.jobId) c.jobId = row.jobId;
+    closed.push(c);
+    if (wholeTab) tabClosed.set(a.workspace_id, [...(tabClosed.get(a.workspace_id) ?? []), c]);
+  }
+
+  for (const [workspaceId, members] of tabClosed) {
+    let gone: boolean;
+    try {
+      // Herdr removes a workspace itself when its last tab closes; only close one that is still listed.
+      gone = !(await d.herdr.listWorkspaces()).some((w) => w.workspace_id === workspaceId);
+      if (!gone && (await d.herdr.listTabs(workspaceId)).length === 0) {
+        await d.herdr.closeWorkspace(workspaceId);
+        gone = true;
+      }
+    } catch (e) {
+      if (!(e instanceof HerdrError)) throw e;
+      continue; // can't tell; leave the workspace alone
+    }
+    if (gone) for (const c of members) c.closed = "tab+workspace";
+  }
+  return { closed, refused };
 }

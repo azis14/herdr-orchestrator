@@ -21,6 +21,10 @@ export interface JobAgent {
   /** True when the job created `workspaceId` (safe to close at cleanup); false means only `tabId` is the job's. */
   createdWorkspace?: boolean;
   status: string;
+  /** Claude session the agent was running when cleanup stopped it, so it can be resumed. */
+  sessionId?: string;
+  /** The folder the agent was in when cleanup stopped it. */
+  lastCwd?: string;
 }
 
 export interface Job {

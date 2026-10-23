@@ -122,6 +122,18 @@ export class Herdr {
     return workspacePlacement(await this.call(args));
   }
 
+  async closePane(paneId: string): Promise<void> {
+    await this.call(["pane", "close", paneId]);
+  }
+
+  async closeTab(tabId: string): Promise<void> {
+    await this.call(["tab", "close", tabId]);
+  }
+
+  async closeWorkspace(workspaceId: string): Promise<void> {
+    await this.call(["workspace", "close", workspaceId]);
+  }
+
   async startAgent(name: string, kind: string, paneId: string, args: string[]): Promise<void> {
     const cmd = ["agent", "start", name, "--kind", kind, "--pane", paneId];
     if (args.length) cmd.push("--", ...args);

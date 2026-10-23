@@ -135,4 +135,21 @@ describe("Herdr", () => {
     expect(e).toBeInstanceOf(HerdrError);
     expect(e.message).toContain("no such pane");
   });
+
+  test("close methods run pane, tab and workspace close", async () => {
+    const run = fakeRunner({
+      "pane close": () => ok({ type: "ok" }),
+      "tab close": () => ok({ type: "ok" }),
+      "workspace close": () => ok({ type: "ok" }),
+    });
+    const h = new Herdr(run);
+    await h.closePane("w3:p1");
+    await h.closeTab("w3:t1");
+    await h.closeWorkspace("w3");
+    expect(run.calls).toEqual([
+      ["pane", "close", "w3:p1"],
+      ["tab", "close", "w3:t1"],
+      ["workspace", "close", "w3"],
+    ]);
+  });
 });

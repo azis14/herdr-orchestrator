@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { findDormant, formatAge } from "../src/cleanup";
+import { closeAgents, findDormant, formatAge } from "../src/cleanup";
 import { OrchError } from "../src/errors";
 import { HerdrError } from "../src/herdr";
-import { newJob, setStage, upsertAgent } from "../src/jobs";
+import { loadJob, newJob, setStage, upsertAgent } from "../src/jobs";
 import { ok, testDeps, ws } from "./fakes";
 
 const NOW = new Date("2026-10-23T12:00:00Z");
@@ -43,7 +43,7 @@ interface World {
   failTabs?: boolean;
 }
 
-function setup(w: World, overrides = {}) {
+function setup(w: World, overrides = {}, handlers: Record<string, (a: string[]) => object> = {}) {
   return testDeps(
     {
       "agent list": () => ok({ agents: w.agents ?? [] }),
@@ -60,6 +60,10 @@ function setup(w: World, overrides = {}) {
           ? { code: 1, stderr: "process-info boom" }
           : ok({ process_info: { pane_id: a[3], shell_pid: 1, foreground_processes: w.procs?.[a[3]] ?? [] } }),
       "agent read": () => ({ stdout: w.read ?? "" }),
+      "pane close": () => ok({ type: "ok" }),
+      "tab close": () => ok({ type: "ok" }),
+      "workspace close": () => ok({ type: "ok" }),
+      ...handlers,
     },
     { now: () => NOW, ...overrides },
   );
@@ -283,5 +287,221 @@ describe("findDormant", () => {
     expect(r.skipped).toEqual([
       { agentName: "a", paneId: "w3:p1", workspace: "shop2.0", reason: "tab info unavailable" },
     ]);
+  });
+});
+
+describe("closeAgents", () => {
+  const tab = (id: string, panes = 1) => ({ tab_id: id, workspace_id: "w3", label: id, pane_count: panes });
+  const closes = (run: { calls: string[][] }) => run.calls.filter((c) => c[1] === "close").map((c) => c.join(" "));
+
+  test("closes the pane when the tab has other panes", async () => {
+    const { deps, run } = setup({ agents: [agent({})], tabs: { w3: [tab("w3:t1", 2)] } });
+    const r = await closeAgents(deps, ["w3:p1@0-0"]);
+    expect(r.refused).toEqual([]);
+    expect(r.closed).toEqual([{ agentName: "w3:p1", paneId: "w3:p1", workspace: "shop2.0", closed: "pane" }]);
+    expect(closes(run)).toEqual(["pane close w3:p1"]);
+  });
+
+  test("closes the tab when the agent is alone in it", async () => {
+    const { deps, run } = setup({ agents: [agent({})], tabs: { w3: [tab("w3:t1"), tab("w3:t2")] } });
+    const r = await closeAgents(deps, ["w3:p1@0-0"]);
+    expect(r.closed.map((c) => c.closed)).toEqual(["tab"]);
+    expect(closes(run)).toEqual(["tab close w3:t1"]);
+  });
+
+  test("a tab missing from tab list closes only the pane", async () => {
+    const { deps, run } = setup({ agents: [agent({})], tabs: { w3: [tab("w3:other")] } });
+    await closeAgents(deps, ["w3:p1@0-0"]);
+    expect(closes(run)).toEqual(["pane close w3:p1"]);
+  });
+
+  /** Two idle agents in w3, each alone in its tab; `extraTab` adds a plain terminal tab that stays. */
+  function twoAgents(extraTab: boolean, herdrRemovesWorkspace = false) {
+    const shut = new Set<string>();
+    const wsGone = { v: false };
+    const tabs = () => [tab("w3:t1"), tab("w3:t2"), ...(extraTab ? [tab("w3:tb")] : [])].filter((t) => !shut.has(t.tab_id));
+    return setup(
+      {
+        agents: [agent({ name: "a", pane_id: "w3:p1", tab_id: "w3:t1" }), agent({ name: "b", pane_id: "w3:p2", tab_id: "w3:t2" })],
+      },
+      {},
+      {
+        "tab list": () => ok({ tabs: tabs() }),
+        "tab close": (a) => {
+          shut.add(a[2]);
+          if (herdrRemovesWorkspace && !tabs().length) wsGone.v = true;
+          return ok({ type: "ok" });
+        },
+        "workspace list": () => ok({ workspaces: wsGone.v ? [] : [{ ...ws("w3", "shop2.0", 1), tab_count: 3 }] }),
+        "workspace close": () => {
+          wsGone.v = true;
+          return ok({ type: "ok" });
+        },
+      },
+    );
+  }
+
+  test("closes the workspace once, after all its agents", async () => {
+    const { deps, run } = twoAgents(false);
+    const r = await closeAgents(deps, ["w3:p1@0-0", "w3:p2@0-0"]);
+    expect(closes(run)).toEqual(["tab close w3:t1", "tab close w3:t2", "workspace close w3"]);
+    expect(r.closed.map((c) => c.closed)).toEqual(["tab+workspace", "tab+workspace"]);
+  });
+
+  test("keeps the workspace when a plain tab remains", async () => {
+    const { deps, run } = twoAgents(true);
+    const r = await closeAgents(deps, ["w3:p1@0-0", "w3:p2@0-0"]);
+    expect(closes(run)).toEqual(["tab close w3:t1", "tab close w3:t2"]);
+    expect(r.closed.map((c) => c.closed)).toEqual(["tab", "tab"]);
+  });
+
+  test("skips workspace close when herdr already removed it", async () => {
+    const { deps, run } = twoAgents(false, true);
+    const r = await closeAgents(deps, ["w3:p1@0-0", "w3:p2@0-0"]);
+    expect(r.refused).toEqual([]);
+    expect(closes(run)).toEqual(["tab close w3:t1", "tab close w3:t2"]);
+    expect(r.closed.map((c) => c.closed)).toEqual(["tab+workspace", "tab+workspace"]);
+  });
+
+  test("refuses a pane that is gone and a pane whose token changed, and still closes the rest", async () => {
+    const { deps, run } = setup({
+      agents: [
+        agent({ name: "a", pane_id: "w3:p1", tab_id: "w3:t1", state_change_seq: 5 }),
+        agent({ name: "b", pane_id: "w3:p2", tab_id: "w3:t2" }),
+      ],
+      tabs: { w3: [tab("w3:t1"), tab("w3:t2"), tab("w3:tb")] },
+    });
+    const r = await closeAgents(deps, ["w3:p9@0-0", "w3:p1@4-0", "w3:p2@0-0"]);
+    expect(r.refused).toEqual([
+      { pick: "w3:p9@0-0", reason: "gone" },
+      { pick: "w3:p1@4-0", reason: "changed since listing" },
+    ]);
+    expect(r.closed.map((c) => c.paneId)).toEqual(["w3:p2"]);
+    expect(closes(run)).toEqual(["tab close w3:t2"]);
+  });
+
+  test("refuses malformed, busy, working and review-stage picks with the exact reasons", async () => {
+    const { deps, run } = setup(
+      {
+        agents: [
+          agent({ name: "busy", pane_id: "w3:p1" }),
+          agent({ name: "work", pane_id: "w3:p2", agent_status: "working" }),
+          agent({ name: "review", pane_id: "w3:p3" }),
+        ],
+        procs: { "w3:p1": [{ pid: 7, name: "claude" }] },
+      },
+      { children: async () => [42] },
+    );
+    const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+    upsertAgent(deps.root, job.id, {
+      project: "shop-api", agent: "claude", agentName: "review", workspaceId: "w3", tabId: "w3:t1",
+      paneId: "w3:p3", mode: "herdr-worktree", status: "started",
+    });
+    setStage(deps.root, job.id, "integrate");
+    const r = await closeAgents(deps, ["nonsense", "@0-0", "w3:p1@", "w3:p1@0-0", "w3:p2@0-0", "w3:p3@0-0"]);
+    expect(r.closed).toEqual([]);
+    expect(r.refused.map((x) => x.reason)).toEqual([
+      "bad pick",
+      "bad pick",
+      "bad pick",
+      "running child processes",
+      "state working",
+      `job ${job.id} waiting at integrate`,
+    ]);
+    expect(closes(run)).toEqual([]);
+  });
+
+  test("the same pick twice closes once", async () => {
+    const { deps, run } = setup({ agents: [agent({})], tabs: { w3: [tab("w3:t1"), tab("w3:t2")] } });
+    const r = await closeAgents(deps, ["w3:p1@0-0", "w3:p1@0-0"]);
+    expect(r.closed).toHaveLength(1);
+    expect(r.refused).toEqual([{ pick: "w3:p1@0-0", reason: "gone" }]);
+    expect(closes(run)).toEqual(["tab close w3:t1"]);
+  });
+
+  test("two agents sharing a tab: the first closes its pane, the last closes the tab", async () => {
+    let panes = 2;
+    const { deps, run } = setup(
+      { agents: [agent({ name: "a", pane_id: "w3:p1" }), agent({ name: "b", pane_id: "w3:p2" })] },
+      {},
+      {
+        "tab list": () => ok({ tabs: [tab("w3:t1", panes), tab("w3:tb")] }),
+        "pane close": () => {
+          panes--;
+          return ok({ type: "ok" });
+        },
+      },
+    );
+    await closeAgents(deps, ["w3:p1@0-0", "w3:p2@0-0"]);
+    expect(closes(run)).toEqual(["pane close w3:p1", "tab close w3:t1"]);
+  });
+
+  test("a failed close is refused, not thrown, and the rest still close", async () => {
+    const { deps } = setup(
+      {
+        agents: [agent({ name: "a", pane_id: "w3:p1", tab_id: "w3:t1" }), agent({ name: "b", pane_id: "w3:p2", tab_id: "w3:t2" })],
+        tabs: { w3: [tab("w3:t1"), tab("w3:t2"), tab("w3:tb")] },
+      },
+      {},
+      { "tab close": (a) => (a[2] === "w3:t1" ? { code: 1, stderr: "boom" } : ok({ type: "ok" })) },
+    );
+    const r = await closeAgents(deps, ["w3:p1@0-0", "w3:p2@0-0"]);
+    expect(r.refused).toHaveLength(1);
+    expect(r.refused[0].reason).toContain("close failed");
+    expect(r.closed.map((c) => c.paneId)).toEqual(["w3:p2"]);
+  });
+
+  test("tab list failing refuses the pick instead of closing anything", async () => {
+    const { deps, run } = setup({ agents: [agent({})], failTabs: true });
+    const r = await closeAgents(deps, ["w3:p1@0-0"]);
+    expect(r.refused).toEqual([{ pick: "w3:p1@0-0", reason: "tab info unavailable" }]);
+    expect(closes(run)).toEqual([]);
+  });
+
+  test("stops a job agent and records session and folder before closing", async () => {
+    const at = "2026-10-23T09:00:00Z";
+    const { deps, run } = setup(
+      {
+        agents: [agent({ name: "api-x", cwd: "/work/api.worktrees/j1", agent_session: session("s1"), state_change_seq: 3 })],
+        tabs: { w3: [tab("w3:t1"), tab("w3:t2")] },
+      },
+      {},
+      {
+        "tab close": () => {
+          // by the time herdr is told to close, the job record must already say stopped
+          expect(loadJob(deps.root, job.id).agents[0].status).toBe("stopped");
+          return ok({ type: "ok" });
+        },
+      },
+    );
+    writeSession(deps.claudeProjects, "s1", at);
+    const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+    upsertAgent(deps.root, job.id, {
+      project: "shop-api", agent: "claude", agentName: "api-x", workspaceId: "w3", tabId: "w3:t1",
+      paneId: "w3:p1", mode: "herdr-worktree", status: "started",
+    });
+    const r = await closeAgents(deps, [`w3:p1@3-${new Date(at).getTime()}`]);
+    expect(r.refused).toEqual([]);
+    expect(r.closed[0]).toMatchObject({ agentName: "api-x", jobId: job.id, closed: "tab" });
+    expect(loadJob(deps.root, job.id).agents[0]).toMatchObject({
+      status: "stopped",
+      sessionId: "s1",
+      lastCwd: "/work/api.worktrees/j1",
+    });
+    const log = fs.readFileSync(path.join(deps.root, "jobs", job.id, "log.md"), "utf8");
+    expect(log).toContain("cleanup closed api-x (session s1, folder /work/api.worktrees/j1)");
+    expect(closes(run)).toEqual(["tab close w3:t1"]);
+  });
+
+  test("a job agent without a session is logged as session none and keeps no sessionId", async () => {
+    const { deps } = setup({ agents: [agent({ name: "api-x" })], tabs: { w3: [tab("w3:t1"), tab("w3:t2")] } });
+    const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+    upsertAgent(deps.root, job.id, {
+      project: "shop-api", agent: "claude", agentName: "api-x", workspaceId: "w3", tabId: "w3:t1",
+      paneId: "w3:p1", mode: "herdr-worktree", status: "started",
+    });
+    await closeAgents(deps, ["w3:p1@0-0"]);
+    expect(loadJob(deps.root, job.id).agents[0].sessionId).toBeUndefined();
+    expect(fs.readFileSync(path.join(deps.root, "jobs", job.id, "log.md"), "utf8")).toContain("(session none, folder /nowhere)");
   });
 });
