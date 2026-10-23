@@ -17,12 +17,14 @@ bun orch.ts open <project> [agent] [--topic T]   # new tab in the project's work
 bun orch.ts bash <project> [--topic T]           # same tab placement, plain terminal, no agent
 bun orch.ts code <project | path | .>            # open a project's repo, or any dir, in VS Code (no Herdr)
 bun orch.ts status [--json]           # every Herdr agent, mapped to project and job
+bun orch.ts cleanup [workspace...] [--idle 1h] [--json]   # list dormant agents (idle, no child processes) with a pick each; nothing is closed
+bun orch.ts cleanup --close <pick...>            # close the picks the user approved
 bun orch.ts project add <path> --description D [--name N] [--context a,b]
 bun orch.ts skills [project] [--resolve <skill>]
 bun orch.ts job new|list|show|stage|log|agent|spawn ...
 ```
 
-Slash commands: `/open`, `/bash`, `/code`, `/status`, `/job`, `/register`.
+Slash commands: `/open`, `/bash`, `/code`, `/status`, `/cleanup`, `/job`, `/register`.
 
 ## Architecture
 
@@ -38,6 +40,6 @@ Slash commands: `/open`, `/bash`, `/code`, `/status`, `/job`, `/register`.
 ## Rules that aren't obvious from the code
 
 - **Repo rules win.** A repo's `CLAUDE.md` / `AGENTS.md` / rules / skills override the orchestrator's fallback mechanics (worktree flow, base branch, branch names, env setup, where docs go). shop2.0 uses its own worktree flow, so its jobs spawn with `--repo-worktree`.
-- Never push, open MRs, or answer an agent's permission dialog without the user. Never close Herdr workspaces/tabs/panes this orchestrator didn't create.
+- Never push, open MRs, or answer an agent's permission dialog without the user. Never close Herdr workspaces/tabs/panes without the user's confirmation, and never ones this orchestrator didn't create except through `/cleanup`.
 - Cursor's workspace-trust dialog shows up in Herdr as `idle`. Read the pane before prompting an interactive Cursor agent, or any text you send may answer the dialog. Cursor job agents launch with `--force`, plus `--trust` (the agent's `worktreeArgs`) only inside a job-created worktree, never the user's own checkout.
 - `herdr` with no subcommand fails inside a pane ("nested herdr is disabled"), so always pass a subcommand. `herdr --help` output for the installed binary is the authority on syntax.

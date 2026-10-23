@@ -46,6 +46,13 @@ export function formatAge(ms: number): string {
   return minor ? `${major} ${minor}` : major;
 }
 
+/** `30m`, `3h`, `2d` to milliseconds. */
+export function parseDuration(s: string): number {
+  const m = /^(\d+)([mhd])$/.exec(s);
+  if (!m) throw new OrchError(`bad --idle "${s}": use e.g. 30m, 3h, 2d`);
+  return Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"];
+}
+
 export type AgentCheck =
   | { ok: true; activity: Activity | null; idleMs: number | null; sessionId?: string; token: string }
   | { ok: false; reason: string };
@@ -173,6 +180,41 @@ export async function findDormant(
     candidates.push(c);
   }
   return { candidates, skipped };
+}
+
+export const CLEANUP_NOTE =
+  "note: scheduled wakeups, /loop and Monitor waits can't be detected; check before approving.";
+
+/** The `orch cleanup` listing: a table with each agent's last message under it, then what was skipped, then a caveat. */
+export function formatDormant(r: { candidates: Candidate[]; skipped: Skipped[] }): string {
+  const lines: string[] = [];
+  if (!r.candidates.length) lines.push("no dormant agents");
+  else {
+    const table = [
+      ["AGENT", "WORKSPACE", "IDLE", "JOB", "CLOSES", "PICK"],
+      ...r.candidates.map((c) => [
+        c.agentName,
+        c.workspace,
+        c.idleMs === null ? "unknown" : formatAge(c.idleMs),
+        c.jobId ?? "-",
+        c.closes,
+        c.pick,
+      ]),
+    ];
+    const widths = table[0].map((_, i) => Math.max(...table.map((row) => row[i].length)));
+    const row = (cells: string[]) => cells.map((c, i) => (i === cells.length - 1 ? c : c.padEnd(widths[i]))).join("  ");
+    lines.push(row(table[0]));
+    r.candidates.forEach((c, i) => {
+      lines.push(row(table[i + 1]));
+      if (c.lastMessage) lines.push(`  "${c.lastMessage}"`);
+    });
+  }
+  if (r.skipped.length) {
+    lines.push("skipped:");
+    for (const s of r.skipped) lines.push(`  ${s.agentName} (${s.workspace}): ${s.reason}`);
+  }
+  lines.push(CLEANUP_NOTE);
+  return lines.join("\n");
 }
 
 export interface Closed {

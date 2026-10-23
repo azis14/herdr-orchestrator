@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { closeAgents, findDormant, formatDormant, parseDuration } from "./src/cleanup";
 import { vscodeRunner, type EditorRunner } from "./src/editor";
 import { OrchError } from "./src/errors";
 import { gitRunner, type GitRunner } from "./src/git";
@@ -39,6 +40,8 @@ const USAGE = `usage: bun orch.ts <command>
   bash <project> [--topic T]     open a plain terminal, no agent, in a new tab of the project's workspace
   code <project | path | .>      open a project's repo, or any directory, in VS Code
   status [--json]                every agent across workspaces, by project and job
+  cleanup [workspace...] [--idle D] [--json] | cleanup --close <pick...>
+                                 list dormant agents (idle D, default 1h) with a pick for each; close approved picks
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
   skills [project] [--resolve <skill>] [--json]
@@ -117,6 +120,31 @@ const commands: Record<string, Command> = {
     const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
     const rows = buildStatus(await deps.herdr.listAgents(), deps.reg, listJobs(deps.root));
     deps.out(values.json ? JSON.stringify(rows, null, 2) : formatStatus(rows));
+    return 0;
+  },
+
+  async cleanup(args, deps) {
+    const usage = "usage: cleanup [workspace...] [--idle D] [--json] | cleanup --close <pick...>";
+    const closeAt = args.indexOf("--close");
+    if (closeAt >= 0) {
+      // After --close come only picks; a workspace before it, or any flag after it, is a mixed-up call.
+      const picks = args.slice(closeAt + 1);
+      if (closeAt > 0 || !picks.length || picks.some((p) => p.startsWith("-"))) throw new OrchError(usage);
+      const r = await closeAgents(deps, picks);
+      for (const c of r.closed) {
+        deps.out(`closed ${c.agentName} (${c.workspace}): ${c.closed}${c.jobId ? `, job ${c.jobId} stopped` : ""}`);
+      }
+      for (const f of r.refused) deps.out(`not closed ${f.pick}: ${f.reason}`);
+      return r.closed.length || !r.refused.length ? 0 : 1;
+    }
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { idle: { type: "string" }, json: { type: "boolean" } },
+    });
+    const idleMs = parseDuration(values.idle ?? "1h");
+    const r = await findDormant(deps, { workspaces: positionals, idleMs });
+    deps.out(values.json ? JSON.stringify(r, null, 2) : formatDormant(r));
     return 0;
   },
 

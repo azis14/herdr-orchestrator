@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { main } from "../orch";
-import { testDeps } from "./fakes";
+import { newJob, upsertAgent } from "../src/jobs";
+import { ok, testDeps, ws } from "./fakes";
 
 describe("cli open", () => {
   test("opens with default agent", async () => {
@@ -131,5 +132,179 @@ describe("cli project", () => {
       expect(await main(argv, deps)).toBe(1);
       expect(err.join("\n")).toContain("project add");
     }
+  });
+});
+
+describe("cli cleanup", () => {
+  const NOW = new Date("2026-10-23T12:00:00Z");
+  const HOUR = 3_600_000;
+  const at = (hoursAgo: number) => new Date(NOW.getTime() - hoursAgo * HOUR).toISOString();
+
+  const agent = (o: Record<string, unknown>) => ({
+    agent: "claude",
+    agent_status: "idle",
+    cwd: "/nowhere",
+    pane_id: "w3:p1",
+    tab_id: "w3:t1",
+    workspace_id: "w3",
+    ...o,
+  });
+  const session = (id: string) => ({ agent: "claude", kind: "id", source: "herdr:claude", value: id });
+
+  function writeSession(projects: string, id: string, when: string, reply: string) {
+    const file = path.join(projects, "-proj", `${id}.jsonl`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const lines = [
+      { type: "user", timestamp: when, message: { content: "hi" } },
+      { type: "assistant", timestamp: when, message: { content: [{ type: "text", text: reply }] } },
+    ];
+    fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  }
+
+  /** `idle3h` has been idle 3h, `idle2h` 2h; both are alone in their tab of workspace w3 (3 tabs). */
+  function setup() {
+    const t = testDeps(
+      {
+        "agent list": () =>
+          ok({
+            agents: [
+              agent({ name: "idle3h", pane_id: "w3:p1", tab_id: "w3:t1", agent_session: session("s3"), state_change_seq: 4 }),
+              agent({ name: "idle2h", pane_id: "w3:p2", tab_id: "w3:t2", agent_session: session("s2"), state_change_seq: 5 }),
+            ],
+          }),
+        "workspace list": () => ok({ workspaces: [{ ...ws("w3", "shop2.0", 1), tab_count: 3 }] }),
+        "tab list": () =>
+          ok({
+            tabs: ["w3:t1", "w3:t2", "w3:t3"].map((id) => ({ tab_id: id, workspace_id: "w3", label: id, pane_count: 1 })),
+          }),
+        "pane process-info": (a) =>
+          ok({ process_info: { pane_id: a[3], shell_pid: 1, foreground_processes: [] } }),
+        "agent read": () => ({ stdout: "" }),
+        "pane close": () => ok({ type: "ok" }),
+        "tab close": () => ok({ type: "ok" }),
+      },
+      { now: () => NOW },
+    );
+    writeSession(t.deps.claudeProjects, "s3", at(3), "Shipped it.");
+    writeSession(t.deps.claudeProjects, "s2", at(2), "Which one?");
+    return t;
+  }
+  const pick3 = `w3:p1@4-${new Date(at(3)).getTime()}`;
+  const pick2 = `w3:p2@5-${new Date(at(2)).getTime()}`;
+  const closeCalls = (run: { calls: string[][] }) => run.calls.filter((c) => c[1] === "close").map((c) => c.join(" "));
+
+  test("cleanup lists candidates with picks and the footer", async () => {
+    const { deps, out, run } = setup();
+    expect(await main(["cleanup"], deps)).toBe(0);
+    const lines = out.join("\n").split("\n");
+    expect(lines[0].split(/\s+/)).toEqual(["AGENT", "WORKSPACE", "IDLE", "JOB", "CLOSES", "PICK"]);
+    expect(lines[1].split(/\s+/)).toEqual(["idle2h", "shop2.0", "2h", "-", "tab", pick2]);
+    expect(lines[2]).toBe('  "Which one?"');
+    expect(lines[3].split(/\s+/)).toEqual(["idle3h", "shop2.0", "3h", "-", "tab", pick3]);
+    expect(lines[4]).toBe('  "Shipped it."');
+    expect(lines.at(-1)).toBe(
+      "note: scheduled wakeups, /loop and Monitor waits can't be detected; check before approving.",
+    );
+    expect(closeCalls(run)).toEqual([]);
+  });
+
+  test("cleanup shows skipped agents, and says so when nothing is dormant", async () => {
+    const { deps, out } = setup();
+    expect(await main(["cleanup", "--idle", "1d"], deps)).toBe(0);
+    const text = out.join("\n");
+    expect(text).toStartWith("no dormant agents\nskipped:\n");
+    expect(text).toContain("  idle3h (shop2.0): active 3h ago");
+    expect(text).toContain("  idle2h (shop2.0): active 2h ago");
+    expect(text).not.toContain("AGENT");
+  });
+
+  test("cleanup --idle 3h passes 3h (an agent idle 2h is now skipped)", async () => {
+    const { deps, out } = setup();
+    expect(await main(["cleanup", "--idle", "3h"], deps)).toBe(0);
+    const text = out.join("\n");
+    expect(text).toContain(pick3);
+    expect(text).not.toContain(pick2);
+    expect(text).toContain("  idle2h (shop2.0): active 2h ago");
+  });
+
+  test("cleanup --idle 5x is rejected", async () => {
+    const { deps, err } = setup();
+    expect(await main(["cleanup", "--idle", "5x"], deps)).toBe(1);
+    expect(err.join("\n")).toContain('bad --idle "5x"');
+  });
+
+  test("cleanup rejects an unknown workspace label, and filters by a known one", async () => {
+    let t = setup();
+    expect(await main(["cleanup", "nope"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("shop2.0");
+    t = setup();
+    expect(await main(["cleanup", "shop2.0"], t.deps)).toBe(0);
+    expect(t.out.join("\n")).toContain(pick3);
+  });
+
+  test("cleanup --close closes and reports", async () => {
+    const { deps, out, run } = setup();
+    expect(await main(["cleanup", "--close", pick3, pick2], deps)).toBe(0);
+    expect(out).toEqual([
+      "closed idle3h (shop2.0): tab",
+      "closed idle2h (shop2.0): tab",
+    ]);
+    expect(closeCalls(run)).toEqual(["tab close w3:t1", "tab close w3:t2"]);
+  });
+
+  test("cleanup --close reports refusals alongside closes and exits 0", async () => {
+    const { deps, out } = setup();
+    expect(await main(["cleanup", "--close", pick3, "w3:p9@1-1"], deps)).toBe(0);
+    expect(out).toEqual(["closed idle3h (shop2.0): tab", "not closed w3:p9@1-1: gone"]);
+  });
+
+  test("cleanup --close with only refusals exits 1", async () => {
+    const { deps, out, run } = setup();
+    expect(await main(["cleanup", "--close", "w3:p1@4-1", "junk"], deps)).toBe(1);
+    expect(out).toEqual([
+      "not closed w3:p1@4-1: changed since listing",
+      "not closed junk: bad pick",
+    ]);
+    expect(closeCalls(run)).toEqual([]);
+  });
+
+  test("cleanup --close notes the job it stopped", async () => {
+    const { deps, out } = setup();
+    const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+    upsertAgent(deps.root, job.id, {
+      project: "shop-api", agent: "claude", agentName: "idle3h", workspaceId: "w3", tabId: "w3:t1",
+      paneId: "w3:p1", mode: "herdr-worktree", status: "started",
+    });
+    expect(await main(["cleanup", "--close", pick3], deps)).toBe(0);
+    expect(out).toEqual([`closed idle3h (shop2.0): tab, job ${job.id} stopped`]);
+  });
+
+  test("cleanup --close needs picks and rejects workspace args or --idle", async () => {
+    for (const argv of [
+      ["cleanup", "--close"],
+      ["cleanup", "shop2.0", "--close", pick3],
+      ["cleanup", "--close", pick3, "--idle", "2h"],
+    ]) {
+      const { deps, err, run } = setup();
+      expect(await main(argv, deps)).toBe(1);
+      expect(err.join("\n")).toContain("usage");
+      expect(closeCalls(run)).toEqual([]);
+    }
+  });
+
+  test("cleanup --json is parseable", async () => {
+    const { deps, out } = setup();
+    expect(await main(["cleanup", "--json", "--idle", "150m"], deps)).toBe(0);
+    const j = JSON.parse(out.join("\n"));
+    expect(j.candidates.map((c: { pick: string }) => c.pick)).toEqual([pick3]);
+    expect(j.candidates[0]).toMatchObject({ agentName: "idle3h", workspace: "shop2.0", idleMs: 3 * HOUR, closes: "tab" });
+    expect(j.skipped).toMatchObject([{ agentName: "idle2h", reason: "active 2h ago" }]);
+  });
+
+  test("an agent with no transcript shows IDLE unknown", async () => {
+    const { deps, out } = setup();
+    fs.rmSync(deps.claudeProjects, { recursive: true });
+    expect(await main(["cleanup"], deps)).toBe(0);
+    expect(out.join("\n").split("\n")[1].split(/\s+/).slice(0, 3)).toEqual(["idle2h", "shop2.0", "unknown"]);
   });
 });
