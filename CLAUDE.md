@@ -1,0 +1,39 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+The control room for the user's Herdr session. It keeps a registry of projects (name → repo path) and agents (Claude, Cursor). It opens agents on projects, and it runs cross-project **jobs**: one agent per repo, driven through design → plan → build, with everything reported back here. Design: `docs/superpowers/specs/2026-10-23-orchestrator-design.md`.
+
+## Commands
+
+```bash
+bun test                              # all tests
+bun test tests/open.test.ts           # one file
+bun test -t "name collision"          # tests matching a name
+
+bun orch.ts open <project> [agent]    # new tab in the project's workspace (created if missing); agent defaults to claude
+bun orch.ts status [--json]           # every Herdr agent, mapped to project and job
+bun orch.ts skills [project] [--resolve <skill>]
+bun orch.ts job new|list|show|stage|log|agent|spawn ...
+```
+
+Slash commands: `/open`, `/status`, `/job`.
+
+## Architecture
+
+- **The script does the mechanics; skills do the judgment.** `orch.ts` (Bun, no dependencies) and `src/` handle the registry, Herdr calls, skill scanning, job records and spawning, all deterministically. The `orchestrate-job` skill (plus `claude-code` / `cursor-cli` for driving each agent) handles question routing, cross-repo contract checks and approval stops.
+- **All Herdr and git calls go through injectable runners.** That's `Runner` in `src/herdr.ts` and `GitRunner` in `src/git.ts`, passed in via `Deps` to `main(argv, deps)` in `orch.ts`. Tests use `tests/fakes.ts` (`fakeRunner`, `testRegistry`, `testDeps`) and never touch the real Herdr session.
+- **Registry:** `registry/projects.json` and `registry/agents.json`. To add a project, add an entry (`name`, `path`, `description`, `context` files relative to the repo). To add an agent, add an entry with its Herdr `--kind`, `openArgs` (interactive) and `jobArgs` (broad permissions for job agents), plus a skill for driving it.
+- **Workspaces:** a project's workspace is the Herdr workspace whose label equals the project name. Job agents with the default mode get a linked worktree workspace labelled `<project>:<job-id>`, at `<repo>.worktrees/<job-id>` on branch `feature/<job-id>` off a fetched `origin/dev`.
+- **Agent names** must match Herdr's `^[a-z][a-z0-9_-]{0,31}$`; `toAgentName` in `src/open.ts` sanitizes them (e.g. `shop2.0` → `shop2-0-claude-1`).
+- **Jobs:** `jobs/<id>/` holds `job.json` (stage and agents), `summary.md` (what the user reads) and `log.md` (routed questions and answers). The directory is versioned.
+- **Skills:** the source is in `.agents/skills/<name>/`, and `.claude/skills/<name>` is a symlink to it. Repo skills are never installed or edited from here; an agent uses the repo's own copy of a skill if it has one, else this orchestrator's copy by absolute path (`orch skills <project> --resolve <skill>`).
+
+## Rules that aren't obvious from the code
+
+- **Repo rules win.** A repo's `CLAUDE.md` / `AGENTS.md` / rules / skills override the orchestrator's fallback mechanics (worktree flow, base branch, branch names, env setup, where docs go). shop2.0 uses its own worktree flow, so its jobs spawn with `--repo-worktree`.
+- Never push, open MRs, or answer an agent's permission dialog without the user. Never close Herdr workspaces/tabs/panes this orchestrator didn't create.
+- Cursor's workspace-trust dialog shows up in Herdr as `idle`. Read the pane before prompting an interactive Cursor agent, or any text you send may answer the dialog. Cursor job agents launch with `--force --trust`.
+- `herdr` with no subcommand fails inside a pane ("nested herdr is disabled"), so always pass a subcommand. `herdr --help` output for the installed binary is the authority on syntax.
