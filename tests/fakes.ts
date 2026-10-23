@@ -70,6 +70,7 @@ export function testDeps(handlers: Record<string, FakeHandler> = {}, overrides: 
     reg: testRegistry(),
     root: fs.mkdtempSync(path.join(os.tmpdir(), "orch-root-")),
     git: async () => ({ code: 0, stdout: "", stderr: "" }),
+    editor: async () => ({ code: 0, stderr: "" }),
     out: (s) => out.push(s),
     err: (s) => err.push(s),
     now: () => new Date(2026, 9, 23),

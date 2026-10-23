@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { OrchError } from "../src/errors";
 import { Herdr } from "../src/herdr";
-import { nextAgentName, openProject, toAgentName } from "../src/open";
+import { nextAgentName, openProject, openTerminal, toAgentName } from "../src/open";
 import { fakeRunner, ok, testRegistry, ws, type FakeHandler } from "./fakes";
 
 function runner(workspaces: unknown[], extra: Record<string, FakeHandler> = {}, agents: unknown[] = []) {
@@ -136,6 +136,38 @@ describe("openProject", () => {
     const run = runner([ws("w2", "shop-api-old", 1)]);
     const r = await openProject(new Herdr(run), reg, "shop-api");
     expect(r.createdWorkspace).toBe(true);
+  });
+});
+
+describe("openTerminal", () => {
+  test("existing workspace gets a new tab and no agent starts", async () => {
+    const reg = testRegistry();
+    const run = runner([ws("w5", "shop-api", 2)]);
+    const r = await openTerminal(new Herdr(run), reg, "shop-api");
+    expect(callsOf(run, "tab create")[0]).toEqual([
+      "tab", "create", "--workspace", "w5", "--cwd", reg.projects[0].path, "--no-focus",
+    ]);
+    expect(callsOf(run, "agent start")).toHaveLength(0);
+    expect(callsOf(run, "agent list")).toHaveLength(0);
+    expect(r).toEqual({ project: "shop-api", workspaceId: "w5", tabId: "w5:t9", paneId: "w5:p9", createdWorkspace: false });
+  });
+
+  test("missing workspace is created; topic renames its root tab", async () => {
+    const reg = testRegistry();
+    const run = runner([], { "tab rename": () => ok({}) });
+    const r = await openTerminal(new Herdr(run), reg, "shop-api", { topic: "logs" });
+    expect(callsOf(run, "workspace create")).toHaveLength(1);
+    expect(callsOf(run, "tab rename")[0]).toEqual(["tab", "rename", "w7:t1", "logs"]);
+    expect(callsOf(run, "agent start")).toHaveLength(0);
+    expect(r.createdWorkspace).toBe(true);
+  });
+
+  test("topic labels a new tab in an existing workspace", async () => {
+    const reg = testRegistry();
+    const run = runner([ws("w5", "shop-api", 2)]);
+    await openTerminal(new Herdr(run), reg, "shop-api", { topic: "logs" });
+    expect(callsOf(run, "tab create")[0]).toContain("logs");
+    expect(callsOf(run, "tab rename")).toHaveLength(0);
   });
 });
 

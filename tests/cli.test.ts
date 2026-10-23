@@ -27,6 +27,48 @@ describe("cli open", () => {
     expect(t.err.join("\n")).toContain("usage");
   });
 
+  test("bash opens a terminal tab with no agent", async () => {
+    const { deps, out, run } = testDeps();
+    expect(await main(["bash", "shop-api", "--topic", "logs"], deps)).toBe(0);
+    expect(out.join("\n")).toStartWith("opened terminal in shop-api");
+    expect(run.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
+  });
+
+  test("bash rejects an agent arg or an empty --topic", async () => {
+    let t = testDeps();
+    expect(await main(["bash", "shop-api", "claude"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("usage");
+    t = testDeps();
+    expect(await main(["bash", "shop-api", "--topic", ""], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("--topic");
+  });
+
+  test("code opens a project's repo, a directory path, or '.'", async () => {
+    const opened: string[] = [];
+    const { deps, out } = testDeps({}, { editor: async (dir) => (opened.push(dir), { code: 0, stderr: "" }) });
+    expect(await main(["code", "shop-api"], deps)).toBe(0);
+    expect(out.join("\n")).toStartWith("opened shop-api in VS Code");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orch-code-"));
+    expect(await main(["code", dir], deps)).toBe(0);
+    expect(await main(["code", "."], deps)).toBe(0);
+    expect(opened).toEqual([deps.reg.projects[0].path, dir, process.cwd()]);
+  });
+
+  test("code rejects a target that is neither a project nor a directory", async () => {
+    const t = testDeps();
+    expect(await main(["code", "nope-not-here"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("shop-api");
+  });
+
+  test("code reports a launcher failure, and needs exactly one target", async () => {
+    let t = testDeps({}, { editor: async () => ({ code: 127, stderr: "code: not found" }) });
+    expect(await main(["code", "shop-api"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("code: not found");
+    t = testDeps();
+    expect(await main(["code"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("usage");
+  });
+
   test("unknown project returns 1 and lists known projects", async () => {
     const { deps, err } = testDeps();
     expect(await main(["open", "nope"], deps)).toBe(1);

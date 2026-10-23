@@ -14,18 +14,20 @@ bun test tests/open.test.ts           # one file
 bun test -t "name collision"          # tests matching a name
 
 bun orch.ts open <project> [agent] [--topic T]   # new tab in the project's workspace (created if missing); agent defaults to claude; tab labelled T
+bun orch.ts bash <project> [--topic T]           # same tab placement, plain terminal, no agent
+bun orch.ts code <project | path | .>            # open a project's repo, or any dir, in VS Code (no Herdr)
 bun orch.ts status [--json]           # every Herdr agent, mapped to project and job
 bun orch.ts project add <path> --description D [--name N] [--context a,b]
 bun orch.ts skills [project] [--resolve <skill>]
 bun orch.ts job new|list|show|stage|log|agent|spawn ...
 ```
 
-Slash commands: `/open`, `/status`, `/job`, `/register`.
+Slash commands: `/open`, `/bash`, `/code`, `/status`, `/job`, `/register`.
 
 ## Architecture
 
 - **The script does the mechanics; skills do the judgment.** `orch.ts` (Bun, no dependencies) and `src/` handle the registry, Herdr calls, skill scanning, job records and spawning, all deterministically. The `orchestrate-job` skill (plus `claude-code` / `cursor-cli` for driving each agent) handles question routing, cross-repo contract checks and approval stops.
-- **All Herdr and git calls go through injectable runners.** That's `Runner` in `src/herdr.ts` and `GitRunner` in `src/git.ts`, passed in via `Deps` to `main(argv, deps)` in `orch.ts`. Tests use `tests/fakes.ts` (`fakeRunner`, `testRegistry`, `testDeps`) and never touch the real Herdr session.
+- **All Herdr, git and editor calls go through injectable runners.** That's `Runner` in `src/herdr.ts`, `GitRunner` in `src/git.ts` and `EditorRunner` in `src/editor.ts`, passed in via `Deps` to `main(argv, deps)` in `orch.ts`. Tests use `tests/fakes.ts` (`fakeRunner`, `testRegistry`, `testDeps`) and never touch the real Herdr session.
 - **Registry:** `registry/projects.json` and `registry/agents.json`. To add a project, use `/register <path>` (or `orch project add`); entries have `name`, `path`, `description`, `context` files relative to the repo. To add an agent, add an entry with its Herdr `--kind`, `openArgs` (interactive), `jobArgs` (broad permissions for job agents) and optional `worktreeArgs` (added only inside job-created worktrees), plus a skill for driving it.
 - **Workspaces:** a project's workspace is the Herdr workspace whose label equals the project name. Job agents with the default mode get a linked worktree workspace labelled `<project>:<job-id>`, at `<repo>.worktrees/<job-id>` on branch `feature/<job-id>` off a fetched `origin/dev`.
 - **Agent names** must match Herdr's `^[a-z][a-z0-9_-]{0,31}$`; `toAgentName` in `src/open.ts` sanitizes them (e.g. `shop2.0` → `shop2-0`). They're unique across the whole Herdr session, so `open` names agents after their kind and numbers repeats: `claude`, `claude-2`, ...; the tab takes `--topic`, else Herdr's default label. Job agents use `jobAgentName` in `src/spawn.ts`, which is `<project>-<slug>` plus a hash of the job id, so long slugs never collide.

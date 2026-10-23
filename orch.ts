@@ -1,12 +1,14 @@
 #!/usr/bin/env bun
+import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { vscodeRunner, type EditorRunner } from "./src/editor";
 import { OrchError } from "./src/errors";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
-import { openProject } from "./src/open";
-import { addProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
+import { openProject, openTerminal } from "./src/open";
+import { addProject, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
 import { spawnJobAgent } from "./src/spawn";
 import { buildStatus, formatStatus } from "./src/status";
@@ -19,6 +21,7 @@ export interface Deps {
   /** Orchestrator root: where `jobs/` lives. */
   root: string;
   git: GitRunner;
+  editor: EditorRunner;
   out: (s: string) => void;
   err: (s: string) => void;
   now: () => Date;
@@ -28,6 +31,8 @@ const USAGE = `usage: bun orch.ts <command>
 
   open <project> [agent] [--topic T]
                                  open an agent in a new tab of the project's workspace (tab labelled T)
+  bash <project> [--topic T]     open a plain terminal, no agent, in a new tab of the project's workspace
+  code <project | path | .>      open a project's repo, or any directory, in VS Code
   status [--json]                every agent across workspaces, by project and job
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
@@ -59,6 +64,47 @@ const commands: Record<string, Command> = {
       `opened ${r.agentName} (${r.agent}) in ${r.project}: workspace ${r.workspaceId} tab ${r.tabId} pane ${r.paneId}` +
         (r.createdWorkspace ? " [new workspace]" : ""),
     );
+    return 0;
+  },
+
+  async bash(args, deps) {
+    const usage = "usage: bash <project> [--topic T]";
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { topic: { type: "string" } },
+    });
+    const [project] = positionals;
+    if (!project || positionals.length > 1) throw new OrchError(usage);
+    const topic = values.topic?.trim();
+    if (values.topic !== undefined && !topic) throw new OrchError("bash: --topic is empty");
+    const r = await openTerminal(deps.herdr, deps.reg, project, { topic });
+    deps.out(
+      `opened terminal in ${r.project}: workspace ${r.workspaceId} tab ${r.tabId} pane ${r.paneId}` +
+        (r.createdWorkspace ? " [new workspace]" : ""),
+    );
+    return 0;
+  },
+
+  async code(args, deps) {
+    const { positionals } = parseArgs({ args, allowPositionals: true });
+    if (positionals.length !== 1) throw new OrchError("usage: code <project | path | .>");
+    const target = positionals[0];
+    let name: string | undefined;
+    let dir: string;
+    if (deps.reg.projects.some((p) => p.name === target)) {
+      ({ name, path: dir } = getProject(deps.reg, target));
+    } else {
+      dir = path.resolve(target);
+      if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
+        throw new OrchError(
+          `"${target}" is neither a project nor a directory. Known projects: ${deps.reg.projects.map((p) => p.name).join(", ")}`,
+        );
+      }
+    }
+    const r = await deps.editor(dir);
+    if (r.code !== 0) throw new OrchError(`code ${dir} failed (exit ${r.code})${r.stderr.trim() ? `: ${r.stderr.trim()}` : ""}`);
+    deps.out(`opened ${name ? `${name} ` : ""}in VS Code: ${dir}`);
     return 0;
   },
 
@@ -228,6 +274,7 @@ if (import.meta.main) {
       reg,
       root: ORCH_ROOT,
       git: gitRunner,
+      editor: vscodeRunner,
       out: (s) => console.log(s),
       err: (s) => console.error(s),
       now: () => new Date(),

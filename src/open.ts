@@ -44,6 +44,45 @@ export function nextAgentName(base: string, live: AgentInfo[]): string {
   return make(n);
 }
 
+export interface TerminalResult {
+  project: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  createdWorkspace: boolean;
+}
+
+/** A new tab in the project's workspace, creating the workspace if needed; `topic` labels the tab. */
+async function placeTab(h: Herdr, cwd: string, label: string, topic?: string) {
+  const existing = findProjectWorkspace(await h.listWorkspaces(), label);
+  const placement: Placement = existing
+    ? await h.createTab(existing.workspace_id, cwd, topic)
+    : await h.createWorkspace(cwd, label);
+  return { placement, createdWorkspace: !existing };
+}
+
+/** Open a plain terminal on a project: a new tab in the project's workspace, with no agent started. */
+export async function openTerminal(
+  h: Herdr,
+  reg: Registry,
+  project: string,
+  o: { topic?: string } = {},
+): Promise<TerminalResult> {
+  const p = getProject(reg, project);
+  const { placement, createdWorkspace } = await placeTab(h, p.path, p.name, o.topic);
+  if (createdWorkspace && o.topic) {
+    try {
+      await h.renameTab(placement.tabId, o.topic);
+    } catch (e) {
+      throw new OrchError(
+        `${(e as Error).message}\n` +
+          `left open: workspace ${placement.workspaceId} tab ${placement.tabId} pane ${placement.paneId}`,
+      );
+    }
+  }
+  return { project: p.name, ...placement, createdWorkspace };
+}
+
 /**
  * Open an agent on a project: a new tab in the project's workspace, creating the workspace if needed.
  * The agent is named after its kind (`claude`, `claude-2`, ...). `topic` labels the tab; without it herdr's default stays.
@@ -58,14 +97,10 @@ export async function openProject(
   const p = getProject(reg, project);
   const a = getAgent(reg, agent, p);
   const name = o.name ?? nextAgentName(a.name, await h.listAgents());
-
-  const existing = findProjectWorkspace(await h.listWorkspaces(), p.name);
-  const placement: Placement = existing
-    ? await h.createTab(existing.workspace_id, p.path, o.topic)
-    : await h.createWorkspace(p.path, p.name);
+  const { placement, createdWorkspace } = await placeTab(h, p.path, p.name, o.topic);
 
   try {
-    if (!existing && o.topic) await h.renameTab(placement.tabId, o.topic);
+    if (createdWorkspace && o.topic) await h.renameTab(placement.tabId, o.topic);
     await h.startAgent(name, a.kind, placement.paneId, o.args ?? a.openArgs);
   } catch (e) {
     throw new OrchError(
@@ -73,5 +108,5 @@ export async function openProject(
         `left open: workspace ${placement.workspaceId} tab ${placement.tabId} pane ${placement.paneId}`,
     );
   }
-  return { project: p.name, agent: a.name, agentName: name, ...placement, createdWorkspace: !existing };
+  return { project: p.name, agent: a.name, agentName: name, ...placement, createdWorkspace };
 }
