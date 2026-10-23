@@ -58,7 +58,7 @@ function setup(w: World, overrides = {}, handlers: Record<string, (a: string[]) 
       "pane process-info": (a) =>
         w.failProcs?.includes(a[3])
           ? { code: 1, stderr: "process-info boom" }
-          : ok({ process_info: { pane_id: a[3], shell_pid: 1, foreground_processes: w.procs?.[a[3]] ?? [] } }),
+          : ok({ process_info: { pane_id: a[3], shell_pid: 1, foreground_processes: w.procs?.[a[3]] ?? [{ pid: 1, name: "claude" }] } }),
       "agent read": () => ({ stdout: w.read ?? "" }),
       "pane close": () => ok({ type: "ok" }),
       "tab close": () => ok({ type: "ok" }),
@@ -290,6 +290,30 @@ describe("findDormant", () => {
     expect(r.skipped[0].reason).toBe("process info unavailable");
   });
 
+  test("an empty foreground process list skips the agent as process info unavailable", async () => {
+    const { deps } = setup({ agents: [agent({})], procs: { "w3:p1": [] } });
+    const r = await findDormant(deps, opts);
+    expect(r.candidates).toEqual([]);
+    expect(r.skipped[0].reason).toBe("process info unavailable");
+  });
+
+  test("a children lookup that cannot read the process skips the agent", async () => {
+    const { deps } = setup(
+      { agents: [agent({})] },
+      { children: async () => { throw new OrchError("cannot read the children of pid 1"); } },
+    );
+    const r = await findDormant(deps, opts);
+    expect(r.candidates).toEqual([]);
+    expect(r.skipped[0].reason).toBe("process info unavailable");
+  });
+
+  test("a tab list reply without tabs skips the agent instead of reading as an empty workspace", async () => {
+    const { deps } = setup({ agents: [agent({})] }, {}, { "tab list": () => ok({}) });
+    const r = await findDormant(deps, opts);
+    expect(r.candidates).toEqual([]);
+    expect(r.skipped[0].reason).toBe("tab info unavailable");
+  });
+
   test("tab list failing skips that workspace's candidates and the scan continues", async () => {
     const { deps } = setup({
       workspaces: [{ ...ws("w3", "shop2.0", 1), tab_count: 2 }],
@@ -463,6 +487,61 @@ describe("closeAgents", () => {
     expect(r.refused).toHaveLength(1);
     expect(r.refused[0].reason).toContain("close failed");
     expect(r.closed.map((c) => c.paneId)).toEqual(["w3:p2"]);
+  });
+
+  test("a children lookup that cannot read the process refuses the pick", async () => {
+    const { deps, run } = setup(
+      { agents: [agent({})] },
+      { children: async () => { throw new OrchError("cannot read the children of pid 1"); } },
+    );
+    const r = await closeAgents(deps, ["w3:p1@0-0"]);
+    expect(r.refused).toEqual([{ pick: "w3:p1@0-0", reason: "process info unavailable" }]);
+    expect(closes(run)).toEqual([]);
+  });
+
+  describe("job records", () => {
+    function jobWith(deps: { root: string; reg: any }, recs: object[]) {
+      const job = newJob(deps.root, deps.reg, { slug: "x", title: "T", request: "R", projects: ["shop-api"], now: NOW });
+      for (const r of recs) {
+        upsertAgent(deps.root, job.id, {
+          project: "shop-api", agent: "claude", workspaceId: "w3", tabId: "w3:t1", mode: "herdr-worktree", ...r,
+        } as any);
+      }
+      return job;
+    }
+
+    test("the pane-id fallback never adopts a stopped record", async () => {
+      // The live agent is tied to the job only by pane id: a stopped record from an earlier agent holds it.
+      const { deps } = setup({ agents: [agent({ name: "shop-api-x-new", cwd: "/live", agent_session: session("S2") })] });
+      const job = jobWith(deps, [{ agentName: "shop-api-x-old", paneId: "w3:p1", status: "stopped", sessionId: "S1", lastCwd: "/old" }]);
+      const r = await closeAgents(deps, ["w3:p1@0-0"]);
+      expect(r.refused).toEqual([]);
+      expect(loadJob(deps.root, job.id).agents[0]).toMatchObject({ status: "stopped", sessionId: "S1", lastCwd: "/old" });
+      expect(fs.readFileSync(path.join(deps.root, "jobs", job.id, "log.md"), "utf8")).not.toContain("cleanup closed");
+    });
+
+    test("a job record update that throws refuses that pick, closes nothing for it, and the rest still close", async () => {
+      const { deps, run } = setup({
+        agents: [
+          agent({ name: "shop-api-x-1", pane_id: "w3:p1", tab_id: "w3:t1" }),
+          agent({ name: "plain", pane_id: "w3:p2", tab_id: "w3:t2" }),
+        ],
+        tabs: { w3: [tab("w3:t1"), tab("w3:t2"), tab("w3:tb")] },
+      });
+      const job = jobWith(deps, [{ agentName: "shop-api-x-1", paneId: "w3:p1", status: "started" }]);
+      // Corrupt job.json after the listing so the load inside closeAgents throws.
+      const orig = deps.herdr.listTabs.bind(deps.herdr);
+      deps.herdr.listTabs = async (w: string) => {
+        fs.writeFileSync(path.join(deps.root, "jobs", job.id, "job.json"), "{ not json");
+        return orig(w);
+      };
+      const r = await closeAgents(deps, ["w3:p1@0-0", "w3:p2@0-0"]);
+      expect(r.refused).toHaveLength(1);
+      expect(r.refused[0].pick).toBe("w3:p1@0-0");
+      expect(r.refused[0].reason).toStartWith("job record update failed: ");
+      expect(r.closed.map((c) => c.paneId)).toEqual(["w3:p2"]);
+      expect(closes(run)).toEqual(["tab close w3:t2"]);
+    });
   });
 
   test("tab list failing refuses the pick instead of closing anything", async () => {

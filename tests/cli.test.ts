@@ -163,13 +163,14 @@ describe("cli cleanup", () => {
 
   /** `idle3h` has been idle 3h, `idle2h` 2h; both are alone in their tab of workspace w3 (3 tabs). */
   function setup() {
+    let apiPath = "/nowhere"; // idle2h works in the registered shop-api checkout, idle3h in an unregistered folder
     const t = testDeps(
       {
         "agent list": () =>
           ok({
             agents: [
               agent({ name: "idle3h", pane_id: "w3:p1", tab_id: "w3:t1", agent_session: session("s3"), state_change_seq: 4 }),
-              agent({ name: "idle2h", pane_id: "w3:p2", tab_id: "w3:t2", agent_session: session("s2"), state_change_seq: 5 }),
+              agent({ name: "idle2h", cwd: apiPath, pane_id: "w3:p2", tab_id: "w3:t2", agent_session: session("s2"), state_change_seq: 5 }),
             ],
           }),
         "workspace list": () => ok({ workspaces: [{ ...ws("w3", "shop2.0", 1), tab_count: 3 }] }),
@@ -178,13 +179,14 @@ describe("cli cleanup", () => {
             tabs: ["w3:t1", "w3:t2", "w3:t3"].map((id) => ({ tab_id: id, workspace_id: "w3", label: id, pane_count: 1 })),
           }),
         "pane process-info": (a) =>
-          ok({ process_info: { pane_id: a[3], shell_pid: 1, foreground_processes: [] } }),
+          ok({ process_info: { pane_id: a[3], shell_pid: 1, foreground_processes: [{ pid: 1, name: "claude" }] } }),
         "agent read": () => ({ stdout: "" }),
         "pane close": () => ok({ type: "ok" }),
         "tab close": () => ok({ type: "ok" }),
       },
       { now: () => NOW },
     );
+    apiPath = t.deps.reg.projects[0].path;
     writeSession(t.deps.claudeProjects, "s3", at(3), "Shipped it.");
     writeSession(t.deps.claudeProjects, "s2", at(2), "Which one?");
     return t;
@@ -197,10 +199,10 @@ describe("cli cleanup", () => {
     const { deps, out, run } = setup();
     expect(await main(["cleanup"], deps)).toBe(0);
     const lines = out.join("\n").split("\n");
-    expect(lines[0].split(/\s+/)).toEqual(["AGENT", "WORKSPACE", "IDLE", "JOB", "CLOSES", "PICK"]);
-    expect(lines[1].split(/\s+/)).toEqual(["idle3h", "shop2.0", "3h", "-", "tab", pick3]);
+    expect(lines[0].split(/\s+/)).toEqual(["AGENT", "WORKSPACE", "PROJECT", "IDLE", "JOB", "CLOSES", "PICK"]);
+    expect(lines[1].split(/\s+/)).toEqual(["idle3h", "shop2.0", "-", "3h", "-", "tab", pick3]);
     expect(lines[2]).toBe('  "Shipped it."');
-    expect(lines[3].split(/\s+/)).toEqual(["idle2h", "shop2.0", "2h", "-", "tab", pick2]);
+    expect(lines[3].split(/\s+/)).toEqual(["idle2h", "shop2.0", "shop-api", "2h", "-", "tab", pick2]);
     expect(lines[4]).toBe('  "Which one?"');
     expect(lines.at(-1)).toBe(
       "note: scheduled wakeups, /loop and Monitor waits can't be detected; check before approving.",
@@ -336,6 +338,6 @@ describe("cli cleanup", () => {
     const { deps, out } = setup();
     fs.rmSync(deps.claudeProjects, { recursive: true });
     expect(await main(["cleanup"], deps)).toBe(0);
-    expect(out.join("\n").split("\n")[1].split(/\s+/).slice(0, 3)).toEqual(["idle2h", "shop2.0", "unknown"]);
+    expect(out.join("\n").split("\n")[1].split(/\s+/).slice(0, 4)).toEqual(["idle2h", "shop2.0", "shop-api", "unknown"]);
   });
 });

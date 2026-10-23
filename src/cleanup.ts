@@ -2,7 +2,7 @@ import type { Deps } from "../orch";
 import { lastActivity, type Activity } from "./activity";
 import { OrchError } from "./errors";
 import { HerdrError, type AgentInfo, type TabInfo } from "./herdr";
-import { appendLog, listJobs, loadJob, patchAgent } from "./jobs";
+import { appendLog, listJobs, loadJob, patchAgent, type JobAgent } from "./jobs";
 import { buildStatus, type StatusRow } from "./status";
 
 export type CleanupDeps = Pick<Deps, "herdr" | "reg" | "root" | "claudeProjects" | "children" | "now">;
@@ -92,7 +92,7 @@ export async function checkAgent(
       if ((await d.children(pid)).length) return { ok: false, reason: "running child processes" };
     }
   } catch (e) {
-    if (!(e instanceof HerdrError)) throw e;
+    if (!(e instanceof OrchError)) throw e; // HerdrError and the children runner's errors
     return { ok: false, reason: "process info unavailable" }; // can't prove it's idle, so leave it open
   }
   return { ok: true, activity, idleMs, sessionId, token: pickToken(a.pane_id, a.state_change_seq, activity) };
@@ -198,10 +198,11 @@ export function formatDormant(r: { candidates: Candidate[]; skipped: Skipped[] }
   if (!r.candidates.length) lines.push("no dormant agents");
   else {
     const table = [
-      ["AGENT", "WORKSPACE", "IDLE", "JOB", "CLOSES", "PICK"],
+      ["AGENT", "WORKSPACE", "PROJECT", "IDLE", "JOB", "CLOSES", "PICK"],
       ...r.candidates.map((c) => [
         c.agentName,
         c.workspace,
+        c.project ?? "-",
         c.idleMs === null ? "unknown" : formatAge(c.idleMs),
         c.jobId ?? "-",
         c.closes,
@@ -293,36 +294,64 @@ export async function closeAgents(
 
     let undo: ((error: string) => void) | undefined;
     if (row.jobId) {
-      const recs = loadJob(d.root, row.jobId).agents;
-      // The name is the record's identity; a pane id can be reused by a later agent.
-      const rec = recs.find((x) => x.agentName === row.agentName) ?? recs.find((x) => x.paneId === a.pane_id);
-      if (rec) {
-        const patch = { status: "stopped", lastCwd: a.cwd, ...(check.sessionId && { sessionId: check.sessionId }) };
-        patchAgent(d.root, row.jobId, rec.agentName, patch);
-        appendLog(
-          d.root,
-          row.jobId,
-          `cleanup closed ${row.agentName} (session ${check.sessionId ?? "none"}, folder ${a.cwd})`,
-          d.now(),
-        );
-        undo = (error) => {
-          // Put back what was there (an undefined field is dropped when the job is saved).
-          patchAgent(d.root, row.jobId!, rec.agentName, {
-            status: rec.status,
-            sessionId: rec.sessionId,
-            lastCwd: rec.lastCwd,
-          });
-          appendLog(d.root, row.jobId!, `cleanup could not close ${row.agentName}: ${error}`, d.now());
-        };
+      const jobId = row.jobId;
+      let rec: JobAgent | undefined;
+      try {
+        const recs = loadJob(d.root, jobId).agents;
+        // The name is the record's identity; a pane id can be reused by a later agent, so the pane-id
+        // fallback must not adopt a record that already stopped.
+        rec =
+          recs.find((x) => x.agentName === row.agentName) ??
+          recs.find((x) => x.paneId === a.pane_id && x.status !== "stopped");
+        if (rec) {
+          const before = rec;
+          const restore = () =>
+            // Put back what was there (an undefined field is dropped when the job is saved).
+            patchAgent(d.root, jobId, before.agentName, {
+              status: before.status,
+              sessionId: before.sessionId,
+              lastCwd: before.lastCwd,
+            });
+          undo = (error) => {
+            restore();
+            appendLog(d.root, jobId, `cleanup could not close ${row.agentName}: ${error}`, d.now());
+          };
+          const patch = { status: "stopped", lastCwd: a.cwd, ...(check.sessionId && { sessionId: check.sessionId }) };
+          try {
+            patchAgent(d.root, jobId, rec.agentName, patch);
+            appendLog(
+              d.root,
+              jobId,
+              `cleanup closed ${row.agentName} (session ${check.sessionId ?? "none"}, folder ${a.cwd})`,
+              d.now(),
+            );
+          } catch (e) {
+            try {
+              restore();
+            } catch {
+              // the record is as it was, or unreadable; the pick is refused either way
+            }
+            throw e;
+          }
+        }
+      } catch (e) {
+        // Closing without a saved record would lose the conversation: leave the agent open and say why.
+        refused.push({ pick, reason: `job record update failed: ${e instanceof Error ? e.message : String(e)}` });
+        continue;
       }
     }
     try {
       if (wholeTab) await d.herdr.closeTab(a.tab_id);
       else await d.herdr.closePane(a.pane_id);
     } catch (e) {
-      undo?.(e instanceof Error ? e.message : String(e));
+      let restoreNote = "";
+      try {
+        undo?.(e instanceof Error ? e.message : String(e));
+      } catch (u) {
+        restoreNote = `; restoring the job record failed: ${u instanceof Error ? u.message : String(u)}`;
+      }
       if (!(e instanceof HerdrError)) throw e;
-      refused.push({ pick, reason: `close failed: ${e.message}` });
+      refused.push({ pick, reason: `close failed: ${e.message}${restoreNote}` });
       continue;
     }
     done.add(paneId);

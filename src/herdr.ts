@@ -145,7 +145,11 @@ export class Herdr {
   }
 
   async listTabs(workspaceId: string): Promise<TabInfo[]> {
-    return (await this.call(["tab", "list", "--workspace", workspaceId])).tabs ?? [];
+    const args = ["tab", "list", "--workspace", workspaceId];
+    const tabs = (await this.call(args)).tabs;
+    // A missing list is not an empty one: "no tabs" would let cleanup close the workspace.
+    if (!Array.isArray(tabs)) throw new HerdrError(`herdr tab list returned no tabs for ${workspaceId}`, args);
+    return tabs;
   }
 
   /**
@@ -156,7 +160,8 @@ export class Herdr {
   async processPids(paneId: string, name: string): Promise<number[]> {
     const r = await this.call(["pane", "process-info", "--pane", paneId]);
     const procs: { pid: number; name: string }[] | undefined = r?.process_info?.foreground_processes;
-    if (!Array.isArray(procs)) {
+    // An empty list says nothing about the pane, so it must not read as "no child processes".
+    if (!Array.isArray(procs) || !procs.length) {
       throw new HerdrError(`herdr pane process-info returned no foreground_processes for ${paneId}`, [
         "pane",
         "process-info",
