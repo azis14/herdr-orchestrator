@@ -1,24 +1,16 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { OrchError } from "./src/errors";
+import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { openProject } from "./src/open";
 import { loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
+import { spawnJobAgent } from "./src/spawn";
 import { buildStatus, formatStatus } from "./src/status";
 
-export type GitRunner = (cwd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
-
-export const gitRunner: GitRunner = async (cwd, args) => {
-  const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { code, stdout, stderr };
-};
+export { gitRunner, type GitRunner } from "./src/git";
 
 export interface Deps {
   herdr: Herdr;
@@ -39,7 +31,8 @@ const USAGE = `usage: bun orch.ts <command>
                                  list orchestrator or repo skills; resolve which copy an agent uses
   job new <slug> --title T --request R --projects a,b
   job list | job show <id> | job stage <id> <stage> | job log <id> <text>
-  job agent <id> <agentName> key=value...   (status, designPath, planPath, branch, worktreePath)`;
+  job agent <id> <agentName> key=value...   (status, designPath, planPath, branch, worktreePath)
+  job spawn <id> <project> [agent] [--repo-worktree] [--trust]`;
 
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
 
@@ -147,8 +140,22 @@ const commands: Record<string, Command> = {
         patchAgent(deps.root, need(id, "<id>"), need(agentName, "<agentName>"), patch);
         return 0;
       }
+      case "spawn": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { "repo-worktree": { type: "boolean" }, trust: { type: "boolean" } },
+        });
+        const [id, project, agent] = positionals;
+        const a = await spawnJobAgent(deps, need(id, "<id>"), need(project, "<project>"), agent, {
+          repoWorktree: values["repo-worktree"] ?? false,
+          trust: values.trust ?? false,
+        });
+        deps.out(`spawned ${a.agentName} (${a.agent}, ${a.mode}) pane ${a.paneId}`);
+        return 0;
+      }
       default:
-        throw new OrchError("usage: job new|list|show|stage|log|agent ...");
+        throw new OrchError("usage: job new|list|show|stage|log|agent|spawn ...");
     }
   },
 };

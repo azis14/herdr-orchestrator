@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { OrchError } from "../src/errors";
 import { Herdr } from "../src/herdr";
-import { openProject } from "../src/open";
+import { nextAgentName, openProject, toAgentName } from "../src/open";
 import { fakeRunner, ok, testRegistry, ws, type FakeHandler } from "./fakes";
 
 function runner(workspaces: unknown[], extra: Record<string, FakeHandler> = {}, agents: unknown[] = []) {
@@ -106,5 +106,34 @@ describe("openProject", () => {
     const run = runner([ws("w2", "shop-api-old", 1)]);
     const r = await openProject(new Herdr(run), reg, "shop-api");
     expect(r.createdWorkspace).toBe(true);
+  });
+});
+
+describe("agent names (herdr: ^[a-z][a-z0-9_-]{0,31}$)", () => {
+  const valid = /^[a-z][a-z0-9_-]{0,31}$/;
+
+  test("toAgentName sanitizes, prefixes a leading non-letter, and truncates to 32", () => {
+    expect(toAgentName("shop2.0-claude")).toBe("shop2-0-claude");
+    expect(toAgentName("2fa-claude")).toBe("x-2fa-claude");
+    expect(toAgentName("Shop API")).toBe("shop-api");
+    const long = toAgentName("shop2.0-20261023-a-very-long-job-slug-name");
+    expect(long.length).toBeLessThanOrEqual(32);
+    expect(long).toMatch(valid);
+    expect(long.endsWith("-")).toBe(false);
+  });
+
+  test("nextAgentName stays valid with its numeric suffix", () => {
+    expect(nextAgentName("shop2.0-claude", [])).toBe("shop2-0-claude-1");
+    const n = nextAgentName("a".repeat(40), []);
+    expect(n).toMatch(valid);
+    expect(n.endsWith("-1")).toBe(true);
+  });
+
+  test("open on a project with a dot in its name starts a valid agent name", async () => {
+    const reg = testRegistry(["shop2.0"]);
+    const run = runner([ws("w3", "shop2.0", 1)]);
+    const r = await openProject(new Herdr(run), reg, "shop2.0");
+    expect(r.agentName).toBe("shop2-0-claude-1");
+    expect(r.workspaceId).toBe("w3");
   });
 });

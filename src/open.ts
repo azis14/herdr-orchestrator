@@ -18,12 +18,26 @@ export function findProjectWorkspace(ws: Workspace[], label: string): Workspace 
   return matches.find((w) => w.focused) ?? matches.sort((a, b) => a.number - b.number)[0];
 }
 
-/** `${base}-${n}` for the smallest n >= 1 not already used by a live agent. */
+/** Herdr agent names: a lowercase letter, then lowercase letters, digits, '-' or '_'; 32 chars max. */
+const AGENT_NAME_MAX = 32;
+
+function trimTo(name: string, max: number): string {
+  return name.slice(0, max).replace(/[-_]+$/, "");
+}
+
+export function toAgentName(raw: string, max = AGENT_NAME_MAX): string {
+  let name = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/-{2,}/g, "-").replace(/^-+/, "");
+  if (!/^[a-z]/.test(name)) name = `x-${name}`;
+  return trimTo(name, max);
+}
+
+/** `${base}-${n}` for the smallest n >= 1 not already used by a live agent, kept a valid herdr name. */
 export function nextAgentName(base: string, live: AgentInfo[]): string {
   const taken = new Set(live.map((a) => a.name).filter(Boolean));
+  const make = (n: number) => `${toAgentName(base, AGENT_NAME_MAX - String(n).length - 1)}-${n}`;
   let n = 1;
-  while (taken.has(`${base}-${n}`)) n++;
-  return `${base}-${n}`;
+  while (taken.has(make(n))) n++;
+  return make(n);
 }
 
 /** Open an agent on a project: a new tab in the project's workspace, creating the workspace if needed. */
