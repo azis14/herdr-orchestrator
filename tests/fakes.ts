@@ -35,7 +35,7 @@ export function testRegistry(names: string[] = ["shop-api", "shop-ui"]): Registr
     defaultAgent: "claude",
     agents: [
       { name: "claude", kind: "claude", openArgs: [], jobArgs: [] },
-      { name: "cursor", kind: "cursor", openArgs: [], jobArgs: ["--force"] },
+      { name: "cursor", kind: "cursor", openArgs: [], jobArgs: ["--force"], worktreeArgs: ["--trust"] },
     ],
     projects: names.map((name) => ({
       name,

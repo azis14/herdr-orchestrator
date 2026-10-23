@@ -12,6 +12,7 @@ How the orchestrator drives a Claude Code (`claude`) agent running in a Herdr pa
 - **Interactive (the user takes over):** `bun /home/user/orchestrator/orch.ts open <project> claude`. This opens a new tab in the project's workspace (creating the workspace if needed) and starts Claude with its normal defaults. The output line names the agent, e.g. `shop-api-claude-1`.
 - **Job agent:** `bun /home/user/orchestrator/orch.ts job spawn <job-id> <project> claude [--repo-worktree]`. No extra args: job agents inherit the user's `defaultMode: auto` from `~/.claude/settings.json`, so they rarely stop for permission.
 - **Startup trust dialog.** In a directory Claude hasn't been trusted in, it shows "Accessing workspace … Is this a project you created or one you trust?" with `❯ No, exit` selected. Herdr reports this as `blocked`, and `agent start` fails with `agent_not_ready`. Worktrees of an already-trusted repo don't show it. Never answer it yourself: tell the user which pane and directory, and send their answer only if they ask you to.
+- **After a failed job start,** the job records the agent as `start-failed`, with its pane and worktree. Once the dialog is answered and the agent is up, run `orch job spawn <job-id> <project>` again: it adopts the live agent without creating anything.
 
 ## Hand it a task
 

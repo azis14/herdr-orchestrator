@@ -21,6 +21,8 @@ export interface AgentDef {
   openArgs: string[];
   /** Native args for job agents (broad permissions). */
   jobArgs: string[];
+  /** Extra args only when the agent runs in a job-created worktree (e.g. Cursor `--trust`), never the user's checkout. */
+  worktreeArgs?: string[];
 }
 
 export interface Registry {
@@ -47,6 +49,7 @@ export function loadRegistry(dir = path.join(ORCH_ROOT, "registry")): Registry {
     if (!p.name || !p.path) throw new OrchError(`project entry needs a name and a path: ${JSON.stringify(p)}`);
     if (seen.has(p.name)) throw new OrchError(`duplicate project name in registry: ${p.name}`);
     seen.add(p.name);
+    p.path = path.resolve(p.path);
     p.context ??= [];
   }
   const agentNames = new Set(reg.agents.map((a) => a.name));

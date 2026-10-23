@@ -10,7 +10,9 @@ How the orchestrator drives a Cursor CLI (`cursor-agent`) agent running in a Her
 ## Start
 
 - **Interactive (the user takes over):** `bun /home/user/orchestrator/orch.ts open <project> cursor`. Cursor starts with its normal defaults.
-- **Job agent:** `bun /home/user/orchestrator/orch.ts job spawn <job-id> <project> cursor [--repo-worktree]`. Job agents launch with `--force --trust`: run everything not explicitly denied, and trust the workspace without prompting. Job worktrees are new directories, and without `--trust` every one of them stops at the trust dialog.
+- **Job agent:** `bun /home/user/orchestrator/orch.ts job spawn <job-id> <project> cursor [--repo-worktree]`. Job agents launch with `--force` (run everything not explicitly denied).
+  - In a **job-created worktree** they also get `--trust`. Job worktrees are new directories, and without it every one of them stops at the trust dialog.
+  - In **`--repo-worktree` mode** they start in the user's own checkout **without** `--trust`, because that flag would permanently trust the user's checkout. Check that pane for the trust dialog, as for an interactive agent (below).
 - The user's `~/.cursor/cli-config.json` has `approvalMode: "unrestricted"`, so the status bar shows **Run Everything** even without `--force`.
 
 ## The workspace-trust dialog (read before every first prompt)
@@ -23,7 +25,7 @@ In a directory Cursor hasn't trusted, it shows a box: **"⚠ Workspace Trust Req
 herdr agent read <name> --source visible --lines 40
 ```
 
-If the screen shows "Workspace Trust Required", don't prompt. Tell the user which pane and directory, and let them answer it, or send `a` only if they explicitly tell you to. Job agents started with `--trust` never show it.
+If the screen shows "Workspace Trust Required", don't prompt. Tell the user which pane and directory, and let them answer it, or send `a` only if they explicitly tell you to. Job agents in job-created worktrees start with `--trust` and never show it; `--repo-worktree` job agents can.
 
 ## Hand it a task
 

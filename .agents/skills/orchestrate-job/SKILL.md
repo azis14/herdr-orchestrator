@@ -27,7 +27,8 @@ Job record: `jobs/<id>/job.json` (state, agents), `summary.md` (what the user re
    - **Worktree mode.** If the repo defines its own worktree flow (shop2.0: `/work`, `/repo-worktree`), use `--repo-worktree`. Otherwise use the default, a fresh herdr worktree off `origin/dev` on `feature/<job-id>`.
    - **Required ids.** If the repo's flow needs a REQ/SPEC/TASK id, ask the user for it now.
    - **Agent.** Claude unless the user named Cursor for this job or project.
-4. `orch job spawn <id> <project> [agent] [--repo-worktree]` for each project. Never add `--trust` (Herdr repository trust) unless the user asked; if Herdr refuses for trust, ask the user.
+4. `orch job spawn <id> <project> [agent] [--repo-worktree]` for each project, **one at a time** (each spawn rewrites `job.json`). Never add `--trust` (Herdr repository trust) unless the user asked; if Herdr refuses for trust, ask the user.
+   - Job agent names are `<project>-<slug>-<hash>`, unique per job. If a spawn fails with `start-failed` (e.g. a startup trust dialog), the pane and worktree are already recorded. Resolve the dialog with the user, then run `job spawn` again to adopt the agent.
 5. Tell the user what was spawned (`orch status`).
 
 ## 2. Design
@@ -73,8 +74,10 @@ Resolve `writing-plans` per repo and prompt each agent to plan from its approved
 
 ## 8. Integrate
 
-`orch job stage <id> integrate`. For each repo, follow its push/MR rule if it has one (shop2.0: `repo-mr`, MRs target `dev`); if it has none, ask the user whether to push and open an MR. Then ask before cleaning up the job's worktrees and workspaces, and finish with `orch job stage <id> done`.
+`orch job stage <id> integrate`. For each repo, follow its push/MR rule if it has one (shop2.0: `repo-mr`, MRs target `dev`); if it has none, ask the user whether to push and open an MR. Then ask before cleaning up, and finish with `orch job stage <id> done`.
+
+**Cleanup scope:** close a job agent's workspace only if its record has `createdWorkspace: true`. Otherwise the workspace is the user's (e.g. shop2.0's), so close only the record's `tabId`. Remove a worktree only if the job created it (`mode: herdr-worktree`); a `repo-worktree` worktree follows the repo's own cleanup flow.
 
 ## 9. Resume
 
-On a new session or `/job resume <id>`: run `orch job list`. For each job not at `done`, compare `job.json` against `orch status --json`. An agent whose pane is gone gets `orch job agent <id> <name> status=stopped`, and can be respawned with `orch job spawn`. Re-read `summary.md` and the tail of `log.md` before acting.
+On a new session or `/job resume <id>`: run `orch job list`. For each job not at `done`, compare `job.json` against `orch status --json`. An agent whose pane is gone gets `orch job agent <id> <name> status=stopped`. Then `orch job spawn <id> <project>` reopens its recorded worktree in a new workspace and keeps its recorded design/plan paths; no new branch is created. Re-read `summary.md` and the tail of `log.md` before acting.

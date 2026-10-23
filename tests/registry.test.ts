@@ -38,7 +38,9 @@ describe("registry", () => {
     expect(reg.agents.map((a) => a.name)).toEqual(["claude", "cursor"]);
     expect(reg.defaultAgent).toBe("claude");
     // job agents: Cursor runs everything and skips the workspace-trust dialog (new worktrees are untrusted)
-    expect(reg.agents.find((a) => a.name === "cursor")!.jobArgs).toEqual(["--force", "--trust"]);
+    const cursor = reg.agents.find((a) => a.name === "cursor")!;
+    expect(cursor.jobArgs).toEqual(["--force"]);
+    expect(cursor.worktreeArgs).toEqual(["--trust"]);
     expect(reg.agents.every((a) => a.openArgs.length === 0)).toBe(true);
   });
 
@@ -86,5 +88,12 @@ describe("registry", () => {
     expect(projectForPath(reg, d)?.name).toBe("a");
     expect(projectForPath(reg, path.join(d, "src", "x"))?.name).toBe("a");
     expect(projectForPath(reg, "/nowhere")).toBeUndefined();
+  });
+
+  test("M6: registry paths are normalized (trailing slash, ..)", () => {
+    const d = tempDir();
+    const reg = loadRegistry(tempRegistry([project("a", d + "/"), project("b", d + "/sub/..")]));
+    expect(reg.projects.map((p) => p.path)).toEqual([d, d]);
+    expect(projectForPath(reg, d + ".worktrees/x")?.name).toBe("a");
   });
 });

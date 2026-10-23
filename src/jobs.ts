@@ -18,6 +18,8 @@ export interface JobAgent {
   branch?: string;
   designPath?: string;
   planPath?: string;
+  /** True when the job created `workspaceId` (safe to close at cleanup); false means only `tabId` is the job's. */
+  createdWorkspace?: boolean;
   status: string;
 }
 
