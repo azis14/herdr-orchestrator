@@ -6,6 +6,7 @@ import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAge
 import { openProject } from "./src/open";
 import { loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
+import { buildStatus, formatStatus } from "./src/status";
 
 export type GitRunner = (cwd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 
@@ -33,6 +34,7 @@ export interface Deps {
 const USAGE = `usage: bun orch.ts <command>
 
   open <project> [agent]         open an agent in a new tab of the project's workspace
+  status [--json]                every agent across workspaces, by project and job
   skills [project] [--resolve <skill>] [--json]
                                  list orchestrator or repo skills; resolve which copy an agent uses
   job new <slug> --title T --request R --projects a,b
@@ -53,6 +55,13 @@ const commands: Record<string, Command> = {
       `opened ${r.agentName} (${r.agent}) in ${r.project}: workspace ${r.workspaceId} tab ${r.tabId} pane ${r.paneId}` +
         (r.createdWorkspace ? " [new workspace]" : ""),
     );
+    return 0;
+  },
+
+  async status(args, deps) {
+    const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
+    const rows = buildStatus(await deps.herdr.listAgents(), deps.reg, listJobs(deps.root));
+    deps.out(values.json ? JSON.stringify(rows, null, 2) : formatStatus(rows));
     return 0;
   },
 
