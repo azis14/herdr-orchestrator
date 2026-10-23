@@ -57,9 +57,10 @@ export async function spawnJobAgent(
     throw new OrchError(`project ${project} is not part of job ${jobId} (projects: ${job.projects.join(", ")})`);
   }
   const p = getProject(deps.reg, project);
-  const a = getAgent(deps.reg, agent, p);
   const agentName = jobAgentName(p.name, jobId);
   const existing = job.agents.find((x) => x.agentName === agentName);
+  // A respawn keeps the recorded agent kind (a Cursor agent must not come back as the project default).
+  const a = getAgent(deps.reg, agent ?? existing?.agent, p);
   if (existing && !RESTARTABLE.includes(existing.status)) {
     throw new OrchError(
       `job ${jobId} already has agent ${agentName} (status ${existing.status}); mark it status=stopped to respawn`,
@@ -105,39 +106,45 @@ export async function spawnJobAgent(
   const base = { ...existing, project: p.name, agent: a.name, agentName };
   const worktreeArgs = [...a.jobArgs, ...(a.worktreeArgs ?? [])];
 
-  // Respawn where `orch cleanup` left the agent, resuming its conversation.
-  if (existing?.lastCwd && fs.existsSync(existing.lastCwd)) {
-    const cwd = existing.lastCwd;
-    const resume =
-      existing.sessionId && a.resumeArgs
-        ? a.resumeArgs.map((x) => x.replaceAll("{session}", existing.sessionId!))
-        : [];
-    const note = resume.length ? { resumedSession: existing.sessionId! } : { resumedFresh: true as const };
-    if (insideWorktree(cwd, existing.worktreePath)) {
+  /** Only a herdr-made worktree is the job's own; a repo-made one (even if recorded) is the repo's. */
+  const ownsWorktree = (cwd: string) => existing?.mode === "herdr-worktree" && insideWorktree(cwd, existing.worktreePath);
+
+  /** Reopen at `cwd`: in a new workspace when it is the job's own worktree, else a tab with `jobArgs` only. */
+  async function reopen(cwd: string, resume: string[]): Promise<JobAgent> {
+    if (ownsWorktree(cwd)) {
       const placement = await deps.herdr.createWorkspace(cwd, `${p.name}:${jobId}`);
-      const started = await start(
-        { ...base, mode: existing.mode, ...placement, createdWorkspace: true, status: "starting" },
+      return start(
+        { ...base, mode: existing!.mode, ...placement, createdWorkspace: true, status: "starting" },
         [...worktreeArgs, ...resume],
       );
-      return { ...started, ...note };
     }
-    // Not the job's own worktree (e.g. the user's checkout): never worktree-only args.
+    // Not a folder the job created (the user's checkout, a repo-made worktree): never worktree-only args.
     const r = await openProject(deps.herdr, deps.reg, p.name, a.name, {
       args: [...a.jobArgs, ...resume],
       name: agentName,
       topic: agentName,
       cwd,
     });
-    const saved = saveLive({
+    return saveLive({
       ...base,
-      mode: existing.mode,
+      mode: existing!.mode,
       workspaceId: r.workspaceId,
       tabId: r.tabId,
       paneId: r.paneId,
       createdWorkspace: r.createdWorkspace,
       status: "started",
     });
-    return { ...saved, ...note };
+  }
+
+  // Respawn where `orch cleanup` left the agent, resuming its conversation.
+  if (existing?.lastCwd && fs.existsSync(existing.lastCwd)) {
+    // The session belongs to the recorded agent kind; another kind cannot resume it.
+    const resume =
+      existing.sessionId && a.resumeArgs && a.name === existing.agent
+        ? a.resumeArgs.map((x) => x.replaceAll("{session}", existing.sessionId!))
+        : [];
+    const note = resume.length ? { resumedSession: existing.sessionId! } : { resumedFresh: true as const };
+    return { ...(await reopen(existing.lastCwd, resume)), ...note };
   }
 
   // From here on the conversation cannot be resumed. If cleanup recorded a `lastCwd` that is gone, say so.
@@ -145,12 +152,7 @@ export async function spawnJobAgent(
 
   // Respawn into a worktree the job already has.
   if (existing?.worktreePath && fs.existsSync(existing.worktreePath)) {
-    const placement = await deps.herdr.createWorkspace(existing.worktreePath, `${p.name}:${jobId}`);
-    const started = await start(
-      { ...base, mode: existing.mode, ...placement, createdWorkspace: true, status: "starting" },
-      worktreeArgs,
-    );
-    return { ...started, ...fresh };
+    return { ...(await reopen(existing.worktreePath, [])), ...fresh };
   }
 
   if (o.repoWorktree) {

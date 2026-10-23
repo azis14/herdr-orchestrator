@@ -383,6 +383,59 @@ describe("resuming a cleaned-up agent", () => {
     fs.rmSync(sibling, { recursive: true });
   });
 
+  test("a repo-worktree record whose lastCwd is its recorded worktreePath gets no --trust and opens as a tab", async () => {
+    const t = setup();
+    const wt = tmp();
+    stopped(t, { agent: "cursor", mode: "repo-worktree", worktreePath: wt, lastCwd: wt, sessionId: "S1" }, "cursor");
+    const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o);
+    expect(call(t.run, "workspace create")).toBeUndefined();
+    expect(call(t.run, "tab create")![5]).toBe(wt);
+    const start = call(t.run, "agent start")!;
+    expect(start.slice(start.indexOf("--"))).toEqual(["--", "--force", "--resume", "S1"]);
+    expect(start).not.toContain("--trust");
+    expect(a.resumedSession).toBe("S1");
+    expect(loadJob(t.deps.root, t.job.id).agents[0]).toMatchObject({ mode: "repo-worktree", createdWorkspace: false });
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test("a repo-worktree record with no lastCwd reopens its worktreePath without --trust", async () => {
+    const t = setup();
+    const wt = tmp();
+    stopped(t, { agent: "cursor", mode: "repo-worktree", worktreePath: wt }, "cursor");
+    await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o);
+    expect(call(t.run, "workspace create")).toBeUndefined();
+    expect(call(t.run, "tab create")![5]).toBe(wt);
+    expect(call(t.run, "agent start")).not.toContain("--trust");
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test("respawn without an explicit agent keeps the record's agent kind and resumes its session", async () => {
+    const t = setup(placed);
+    const wt = tmp();
+    stopped(t, { agent: "cursor", worktreePath: wt, lastCwd: wt, sessionId: "C1" }, "cursor");
+    const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o);
+    const start = call(t.run, "agent start")!;
+    expect(start.slice(start.indexOf("--kind"))).toEqual([
+      "--kind", "cursor", "--pane", "w9:p1", "--", "--force", "--trust", "--resume", "C1",
+    ]);
+    expect(a.resumedSession).toBe("C1");
+    expect(loadJob(t.deps.root, t.job.id).agents[0]).toMatchObject({ agent: "cursor", status: "started" });
+    fs.rmSync(wt, { recursive: true });
+  });
+
+  test("an explicit agent that differs from the record's does not resume the old session", async () => {
+    const t = setup(placed);
+    const wt = tmp();
+    stopped(t, { agent: "cursor", worktreePath: wt, lastCwd: wt, sessionId: "C1" }, "cursor");
+    const a = await spawnJobAgent(t.deps, t.job.id, "shop-api", "claude", o);
+    const start = call(t.run, "agent start")!;
+    expect(start).toContain("claude");
+    expect(start).not.toContain("--resume");
+    expect(a.resumedSession).toBeUndefined();
+    expect(a.resumedFresh).toBe(true);
+    fs.rmSync(wt, { recursive: true });
+  });
+
   test("cli job spawn reports the resumed session, or that it started fresh", async () => {
     const t = setup(placed);
     const wt = tmp();
