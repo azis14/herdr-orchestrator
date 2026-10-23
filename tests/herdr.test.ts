@@ -74,4 +74,40 @@ describe("Herdr", () => {
     expect(e2).toBeInstanceOf(HerdrError);
     expect(e2.message).toContain("raw failure text");
   });
+
+  test("listTabs passes the workspace and returns the tabs", async () => {
+    const tab = { tab_id: "w3:t2", workspace_id: "w3", label: "x", pane_count: 2 };
+    const run = fakeRunner({ "tab list": () => ok({ tabs: [tab] }) });
+    expect(await new Herdr(run).listTabs("w3")).toEqual([tab]);
+    expect(run.calls[0]).toEqual(["tab", "list", "--workspace", "w3"]);
+  });
+
+  test("processPids keeps only pids of processes with the given name", async () => {
+    const run = fakeRunner({
+      "pane process-info": () =>
+        ok({
+          process_info: {
+            pane_id: "w3:p1",
+            shell_pid: 1,
+            foreground_processes: [
+              { pid: 10, name: "claude", cwd: "/r" },
+              { pid: 11, name: "node", cwd: "/r" },
+              { pid: 12, name: "claude", cwd: "/r" },
+            ],
+          },
+        }),
+    });
+    expect(await new Herdr(run).processPids("w3:p1", "claude")).toEqual([10, 12]);
+    expect(run.calls[0]).toEqual(["pane", "process-info", "--pane", "w3:p1"]);
+  });
+
+  test("readAgent returns raw stdout and throws HerdrError on failure", async () => {
+    const run = fakeRunner({ "agent read": (a) => (a[2] === "gone" ? { code: 1, stderr: "no such pane" } : { stdout: "line 1\nline 2\n" }) });
+    const h = new Herdr(run);
+    expect(await h.readAgent("w3:p1", 20)).toBe("line 1\nline 2\n");
+    expect(run.calls[0]).toEqual(["agent", "read", "w3:p1", "--lines", "20"]);
+    const e = await h.readAgent("gone", 20).catch((e) => e);
+    expect(e).toBeInstanceOf(HerdrError);
+    expect(e.message).toContain("no such pane");
+  });
 });

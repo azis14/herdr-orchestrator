@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { vscodeRunner, type EditorRunner } from "./src/editor";
@@ -8,6 +9,7 @@ import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { openProject, openTerminal } from "./src/open";
+import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
 import { spawnJobAgent } from "./src/spawn";
@@ -22,6 +24,9 @@ export interface Deps {
   root: string;
   git: GitRunner;
   editor: EditorRunner;
+  /** Claude's transcript root (`~/.claude/projects`). */
+  claudeProjects: string;
+  children: ChildrenRunner;
   out: (s: string) => void;
   err: (s: string) => void;
   now: () => Date;
@@ -275,6 +280,8 @@ if (import.meta.main) {
       root: ORCH_ROOT,
       git: gitRunner,
       editor: vscodeRunner,
+      claudeProjects: path.join(os.homedir(), ".claude", "projects"),
+      children: procChildren,
       out: (s) => console.log(s),
       err: (s) => console.error(s),
       now: () => new Date(),

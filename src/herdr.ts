@@ -28,6 +28,14 @@ export interface Workspace {
   label: string;
   number: number;
   focused: boolean;
+  tab_count?: number;
+}
+
+export interface TabInfo {
+  tab_id: string;
+  workspace_id: string;
+  label: string;
+  pane_count: number;
 }
 
 export interface AgentInfo {
@@ -38,6 +46,8 @@ export interface AgentInfo {
   pane_id: string;
   tab_id: string;
   workspace_id: string;
+  agent_session?: { value: string };
+  state_change_seq?: number;
 }
 
 export interface Placement {
@@ -120,5 +130,26 @@ export class Herdr {
 
   async listAgents(): Promise<AgentInfo[]> {
     return (await this.call(["agent", "list"])).agents ?? [];
+  }
+
+  async listTabs(workspaceId: string): Promise<TabInfo[]> {
+    return (await this.call(["tab", "list", "--workspace", workspaceId])).tabs ?? [];
+  }
+
+  /** Pids of a pane's foreground processes whose name is `name`. */
+  async processPids(paneId: string, name: string): Promise<number[]> {
+    const r = await this.call(["pane", "process-info", "--pane", paneId]);
+    const procs: { pid: number; name: string }[] = r.process_info?.foreground_processes ?? [];
+    return procs.filter((p) => p.name === name).map((p) => p.pid);
+  }
+
+  /** The pane's last `lines` lines. `agent read` prints plain text, not JSON, so this bypasses `call`. */
+  async readAgent(paneId: string, lines: number): Promise<string> {
+    const args = ["agent", "read", paneId, "--lines", String(lines)];
+    const { code, stdout, stderr } = await this.run(args);
+    if (code !== 0) {
+      throw new HerdrError(`herdr agent read failed: ${stderr.trim() || stdout.trim() || `exit ${code}`}`, args);
+    }
+    return stdout;
   }
 }

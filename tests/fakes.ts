@@ -71,6 +71,8 @@ export function testDeps(handlers: Record<string, FakeHandler> = {}, overrides: 
     root: fs.mkdtempSync(path.join(os.tmpdir(), "orch-root-")),
     git: async () => ({ code: 0, stdout: "", stderr: "" }),
     editor: async () => ({ code: 0, stderr: "" }),
+    claudeProjects: fs.mkdtempSync(path.join(os.tmpdir(), "orch-claude-")),
+    children: async () => [],
     out: (s) => out.push(s),
     err: (s) => err.push(s),
     now: () => new Date(2026, 9, 23),
