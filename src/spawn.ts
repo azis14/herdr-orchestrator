@@ -90,7 +90,7 @@ export async function spawnJobAgent(
 
   if (o.repoWorktree) {
     // The user's own checkout: never pass worktree-only args (Cursor --trust would persist trust for it).
-    const r = await openProject(deps.herdr, deps.reg, p.name, a.name, { args: a.jobArgs, name: agentName });
+    const r = await openProject(deps.herdr, deps.reg, p.name, a.name, { args: a.jobArgs, name: agentName, topic: agentName });
     return save({
       ...base,
       mode: "repo-worktree",

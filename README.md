@@ -23,6 +23,7 @@ Run Claude Code in this directory, inside Herdr, and use the slash commands:
 /register ~/repos/my-service     # add a repo to the registry
 /open my-service                 # Claude in a new tab of the project's workspace
 /open my-service cursor          # or Cursor
+/open my-service --topic "login bug"   # tab labelled with a topic
 /status                          # every agent, by project and job
 /job add a status field to the orders API and show it in the UI
 ```
@@ -30,7 +31,7 @@ Run Claude Code in this directory, inside Herdr, and use the slash commands:
 Or call the CLI directly:
 
 ```bash
-bun orch.ts open <project> [agent]
+bun orch.ts open <project> [agent] [--topic T]
 bun orch.ts status [--json]
 ```
 
@@ -38,7 +39,7 @@ bun orch.ts status [--json]
 
 | Command | What it does |
 | --- | --- |
-| `/open <project> [agent]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to `claude`. |
+| `/open <project> [agent] [--topic T]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to `claude`. The agent is named after its kind (`claude`, then `claude-2`, ... since Herdr names are session-wide); the tab is labelled `T` if given, else Herdr numbers it as usual. |
 | `/status` | Shows every Herdr agent mapped to its project and job, plus what each open job is waiting on. |
 | `/register <path> [name]` | Reads the repo, proposes a name, description and context files, and saves them after you approve. |
 | `/job <request>` | Starts a cross-project job. Also `/job list`, `/job show <id>`, `/job resume <id>`. |
@@ -46,7 +47,7 @@ bun orch.ts status [--json]
 ## CLI
 
 ```
-bun orch.ts open <project> [agent]
+bun orch.ts open <project> [agent] [--topic T]
 bun orch.ts status [--json]
 bun orch.ts project add <path> --description D [--name N] [--context a,b,c]
 bun orch.ts skills [project] [--resolve <skill>] [--json]

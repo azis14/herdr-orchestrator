@@ -26,7 +26,8 @@ export interface Deps {
 
 const USAGE = `usage: bun orch.ts <command>
 
-  open <project> [agent]         open an agent in a new tab of the project's workspace
+  open <project> [agent] [--topic T]
+                                 open an agent in a new tab of the project's workspace (tab labelled T)
   status [--json]                every agent across workspaces, by project and job
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
@@ -43,10 +44,17 @@ type Command = (args: string[], deps: Deps) => Promise<number>;
 
 const commands: Record<string, Command> = {
   async open(args, deps) {
-    const { positionals } = parseArgs({ args, allowPositionals: true });
+    const usage = "usage: open <project> [agent] [--topic T]";
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { topic: { type: "string" } },
+    });
     const [project, agent] = positionals;
-    if (!project) throw new OrchError("usage: open <project> [agent]");
-    const r = await openProject(deps.herdr, deps.reg, project, agent);
+    if (!project || positionals.length > 2) throw new OrchError(usage);
+    const topic = values.topic?.trim();
+    if (values.topic !== undefined && !topic) throw new OrchError("open: --topic is empty");
+    const r = await openProject(deps.herdr, deps.reg, project, agent, { topic });
     deps.out(
       `opened ${r.agentName} (${r.agent}) in ${r.project}: workspace ${r.workspaceId} tab ${r.tabId} pane ${r.paneId}` +
         (r.createdWorkspace ? " [new workspace]" : ""),

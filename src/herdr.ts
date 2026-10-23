@@ -86,9 +86,16 @@ export class Herdr {
     return workspacePlacement(await this.call(["workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"]));
   }
 
-  async createTab(workspaceId: string, cwd: string, label: string): Promise<Placement> {
-    const r = await this.call(["tab", "create", "--workspace", workspaceId, "--cwd", cwd, "--label", label, "--no-focus"]);
+  /** Without a label, herdr numbers the tab itself. */
+  async createTab(workspaceId: string, cwd: string, label?: string): Promise<Placement> {
+    const args = ["tab", "create", "--workspace", workspaceId, "--cwd", cwd];
+    if (label) args.push("--label", label);
+    const r = await this.call([...args, "--no-focus"]);
     return { workspaceId, tabId: r.tab.tab_id, paneId: r.root_pane.pane_id };
+  }
+
+  async renameTab(tabId: string, label: string): Promise<void> {
+    await this.call(["tab", "rename", tabId, label]);
   }
 
   async createWorktree(o: {

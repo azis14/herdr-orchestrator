@@ -25,16 +25,16 @@ describe("openProject", () => {
     const run = runner([ws("w5", "shop-api", 2)]);
     const r = await openProject(new Herdr(run), reg, "shop-api");
     expect(callsOf(run, "tab create")[0]).toEqual([
-      "tab", "create", "--workspace", "w5", "--cwd", p, "--label", "shop-api-claude-1", "--no-focus",
+      "tab", "create", "--workspace", "w5", "--cwd", p, "--no-focus",
     ]);
     expect(callsOf(run, "workspace create")).toHaveLength(0);
     expect(callsOf(run, "agent start")[0]).toEqual([
-      "agent", "start", "shop-api-claude-1", "--kind", "claude", "--pane", "w5:p9",
+      "agent", "start", "claude", "--kind", "claude", "--pane", "w5:p9",
     ]);
     expect(r).toEqual({
       project: "shop-api",
       agent: "claude",
-      agentName: "shop-api-claude-1",
+      agentName: "claude",
       workspaceId: "w5",
       tabId: "w5:t9",
       paneId: "w5:p9",
@@ -63,10 +63,40 @@ describe("openProject", () => {
     expect(callsOf(run, "workspace create")).toHaveLength(0);
   });
 
-  test("name collision takes the next free number", async () => {
+  test("name collision takes the next free number, from 2", async () => {
     const reg = testRegistry();
-    const run = runner([ws("w5", "shop-api", 2)], {}, [{ name: "shop-api-claude-1", agent: "claude", pane_id: "w5:p1" }]);
-    expect((await openProject(new Herdr(run), reg, "shop-api")).agentName).toBe("shop-api-claude-2");
+    let run = runner([ws("w5", "shop-api", 2)], {}, [{ name: "claude", agent: "claude", pane_id: "w5:p1" }]);
+    expect((await openProject(new Herdr(run), reg, "shop-api")).agentName).toBe("claude-2");
+    const live = ["claude", "claude-2", "claude-3"].map((name, i) => ({ name, agent: "claude", pane_id: `w5:p${i}` }));
+    run = runner([ws("w5", "shop-api", 2)], {}, live);
+    expect((await openProject(new Herdr(run), reg, "shop-api")).agentName).toBe("claude-4");
+  });
+
+  test("topic labels the new tab; the agent keeps its kind name", async () => {
+    const reg = testRegistry();
+    const run = runner([ws("w5", "shop-api", 2)]);
+    const r = await openProject(new Herdr(run), reg, "shop-api", "cursor", { topic: "login bug" });
+    expect(callsOf(run, "tab create")[0]).toEqual([
+      "tab", "create", "--workspace", "w5", "--cwd", reg.projects[0].path, "--label", "login bug", "--no-focus",
+    ]);
+    expect(callsOf(run, "tab rename")).toHaveLength(0);
+    expect(r.agentName).toBe("cursor");
+  });
+
+  test("topic renames the root tab of a new workspace before the agent starts", async () => {
+    const reg = testRegistry();
+    const run = runner([], { "tab rename": () => ok({}) });
+    await openProject(new Herdr(run), reg, "shop-api", undefined, { topic: "login bug" });
+    expect(callsOf(run, "tab rename")[0]).toEqual(["tab", "rename", "w7:t1", "login bug"]);
+    const keys = run.calls.map((c) => c.slice(0, 2).join(" "));
+    expect(keys.indexOf("tab rename")).toBeLessThan(keys.indexOf("agent start"));
+  });
+
+  test("no topic on a new workspace leaves its root tab alone", async () => {
+    const reg = testRegistry();
+    const run = runner([]);
+    await openProject(new Herdr(run), reg, "shop-api");
+    expect(callsOf(run, "tab rename")).toHaveLength(0);
   });
 
   test("cursor uses kind cursor and openArgs (none)", async () => {
@@ -76,7 +106,7 @@ describe("openProject", () => {
     const start = callsOf(run, "agent start")[0];
     expect(start).toContain("cursor");
     expect(start).not.toContain("--");
-    expect(r.agentName).toBe("shop-api-cursor-1");
+    expect(r.agentName).toBe("cursor");
   });
 
   test("explicit args and name override defaults", async () => {
@@ -122,18 +152,19 @@ describe("agent names (herdr: ^[a-z][a-z0-9_-]{0,31}$)", () => {
     expect(long.endsWith("-")).toBe(false);
   });
 
-  test("nextAgentName stays valid with its numeric suffix", () => {
-    expect(nextAgentName("shop2.0-claude", [])).toBe("shop2-0-claude-1");
-    const n = nextAgentName("a".repeat(40), []);
+  test("nextAgentName stays valid with or without its numeric suffix", () => {
+    expect(nextAgentName("shop2.0-claude", [])).toBe("shop2-0-claude");
+    expect(nextAgentName("a".repeat(40), [])).toMatch(valid);
+    const n = nextAgentName("a".repeat(40), [{ name: "a".repeat(32) } as any]);
     expect(n).toMatch(valid);
-    expect(n.endsWith("-1")).toBe(true);
+    expect(n.endsWith("-2")).toBe(true);
   });
 
-  test("open on a project with a dot in its name starts a valid agent name", async () => {
+  test("open on a project with a dot in its name finds its workspace", async () => {
     const reg = testRegistry(["shop2.0"]);
     const run = runner([ws("w3", "shop2.0", 1)]);
     const r = await openProject(new Herdr(run), reg, "shop2.0");
-    expect(r.agentName).toBe("shop2-0-claude-1");
+    expect(r.agentName).toBe("claude");
     expect(r.workspaceId).toBe("w3");
   });
 });

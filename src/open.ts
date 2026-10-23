@@ -31,33 +31,41 @@ export function toAgentName(raw: string, max = AGENT_NAME_MAX): string {
   return trimTo(name, max);
 }
 
-/** `${base}-${n}` for the smallest n >= 1 not already used by a live agent, kept a valid herdr name. */
+/**
+ * `base` if no live agent has it, else `${base}-${n}` for the smallest free n >= 2, kept a valid
+ * herdr name. Herdr names are unique across the whole session, not per workspace.
+ */
 export function nextAgentName(base: string, live: AgentInfo[]): string {
   const taken = new Set(live.map((a) => a.name).filter(Boolean));
-  const make = (n: number) => `${toAgentName(base, AGENT_NAME_MAX - String(n).length - 1)}-${n}`;
+  const make = (n: number) =>
+    n === 1 ? toAgentName(base) : `${toAgentName(base, AGENT_NAME_MAX - String(n).length - 1)}-${n}`;
   let n = 1;
   while (taken.has(make(n))) n++;
   return make(n);
 }
 
-/** Open an agent on a project: a new tab in the project's workspace, creating the workspace if needed. */
+/**
+ * Open an agent on a project: a new tab in the project's workspace, creating the workspace if needed.
+ * The agent is named after its kind (`claude`, `claude-2`, ...). `topic` labels the tab; without it herdr's default stays.
+ */
 export async function openProject(
   h: Herdr,
   reg: Registry,
   project: string,
   agent?: string,
-  o: { args?: string[]; name?: string } = {},
+  o: { args?: string[]; name?: string; topic?: string } = {},
 ): Promise<OpenResult> {
   const p = getProject(reg, project);
   const a = getAgent(reg, agent, p);
-  const name = o.name ?? nextAgentName(`${p.name}-${a.name}`, await h.listAgents());
+  const name = o.name ?? nextAgentName(a.name, await h.listAgents());
 
   const existing = findProjectWorkspace(await h.listWorkspaces(), p.name);
   const placement: Placement = existing
-    ? await h.createTab(existing.workspace_id, p.path, name)
+    ? await h.createTab(existing.workspace_id, p.path, o.topic)
     : await h.createWorkspace(p.path, p.name);
 
   try {
+    if (!existing && o.topic) await h.renameTab(placement.tabId, o.topic);
     await h.startAgent(name, a.kind, placement.paneId, o.args ?? a.openArgs);
   } catch (e) {
     throw new OrchError(

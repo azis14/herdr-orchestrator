@@ -9,7 +9,22 @@ describe("cli open", () => {
   test("opens with default agent", async () => {
     const { deps, out } = await testDeps();
     expect(await main(["open", "shop-api"], deps)).toBe(0);
-    expect(out.join("\n")).toStartWith("opened shop-api-claude-1 (claude) in shop-api");
+    expect(out.join("\n")).toStartWith("opened claude (claude) in shop-api");
+  });
+
+  test("--topic labels the tab", async () => {
+    const { deps, run } = testDeps();
+    expect(await main(["open", "shop-api", "cursor", "--topic", "login bug"], deps)).toBe(0);
+    expect(run.calls.find((c) => c[0] === "tab" && c[1] === "create")).toContain("login bug");
+  });
+
+  test("empty --topic or a stray arg is rejected", async () => {
+    let t = testDeps();
+    expect(await main(["open", "shop-api", "--topic", " "], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("--topic");
+    t = testDeps();
+    expect(await main(["open", "shop-api", "claude", "extra"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("usage");
   });
 
   test("unknown project returns 1 and lists known projects", async () => {

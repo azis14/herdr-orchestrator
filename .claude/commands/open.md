@@ -1,6 +1,6 @@
 ---
 description: Open an agent on a registered project in Herdr
-argument-hint: <project> [agent]
+argument-hint: <project> [agent] [--topic T]
 allowed-tools: Bash(bun /home/user/orchestrator/orch.ts open:*)
 ---
 
