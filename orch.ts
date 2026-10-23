@@ -63,12 +63,14 @@ const commands: Record<string, Command> = {
 
   async project(args, deps) {
     const [sub, ...rest] = args;
-    if (sub !== "add") throw new OrchError("usage: project add <path> --description D [--name N] [--context a,b,c]");
+    const usage = "usage: project add <path> --description D [--name N] [--context a,b,c]";
+    if (sub !== "add") throw new OrchError(usage);
     const { positionals, values } = parseArgs({
       args: rest,
       allowPositionals: true,
       options: { name: { type: "string" }, description: { type: "string" }, context: { type: "string" } },
     });
+    if (positionals.length > 1) throw new OrchError(usage);
     const need = (v: string | undefined, what: string) => {
       if (!v) throw new OrchError(`project add: missing ${what}`);
       return v;

@@ -121,6 +121,8 @@ export function addProject(dir: string, reg: Registry, input: NewProject): Proje
   if (!/^[^\s,]+$/.test(name)) throw new OrchError(`invalid project name "${name}": no spaces or commas`);
   const owner = projectForPath(reg, abs);
   if (owner) throw new OrchError(`${abs} is already registered as ${owner.name}`);
+  const inner = reg.projects.find((x) => x.path.startsWith(abs + "/") || abs === x.path + ".worktrees");
+  if (inner) throw new OrchError(`${abs} contains registered project ${inner.name}`);
   if (reg.projects.some((p) => p.name === name)) throw new OrchError(`project "${name}" is already registered`);
   const description = input.description.trim();
   if (!description) throw new OrchError("a description is required");

@@ -11,4 +11,4 @@ Register the repo at the path in `$ARGUMENTS` (an optional second word is the pr
 3. Description: read the README and CLAUDE.md and write one line in the registry's style, e.g. "Dashboard API (Go + Echo)".
 4. Name: the given name, else the folder name.
 5. Show the name, path, description and context list, and wait for the user's OK or changes. Don't save before that.
-6. Once agreed, run `bun /home/user/orchestrator/orch.ts project add <path> --name <name> --description "<description>" --context <a,b,c>` and report the saved entry. If it fails, show the error and let the user adjust.
+6. Once agreed, run `bun /home/user/orchestrator/orch.ts project add '<path>' --name '<name>' --description='<description>' --context '<a,b,c>'` and report the saved entry. Single-quote every value (write a `'` inside one as `'\''`) so spaces, quotes and `$` in a path or description reach the CLI unchanged. If it fails, show the error and let the user adjust.

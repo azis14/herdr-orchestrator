@@ -194,6 +194,18 @@ describe("addProject", () => {
     }
   });
 
+  test("rejects a folder that contains a registered project or its worktrees dir", () => {
+    const { reg, dir } = setup();
+    const known = reg.projects[0];
+    const wts = `${known.path}.worktrees`;
+    fs.mkdirSync(wts, { recursive: true });
+    for (const p of [path.dirname(known.path), wts]) {
+      const e = { path: p, name: "other", description: "x", context: [] };
+      expect(() => addProject(dir, reg, e)).toThrow(OrchError);
+      expect(() => addProject(dir, reg, e)).toThrow(`contains registered project ${known.name}`);
+    }
+  });
+
   test("rejects names with whitespace or commas", () => {
     const { reg, dir, repo } = setup();
     for (const name of ["a b", "a,b", ""]) {

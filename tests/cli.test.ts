@@ -55,6 +55,13 @@ describe("cli project", () => {
     expect(err.join("\n")).toContain("--description");
   });
 
+  test("project add with more than one path returns 1 and writes nothing", async () => {
+    const { deps, err, repo, file } = setup();
+    expect(await main(["project", "add", repo, "extra", "--description", "x"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("project add");
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).projects).toEqual([]);
+  });
+
   test("project add duplicate name returns 1 with the message", async () => {
     const { deps, err, repo } = setup();
     expect(await main(["project", "add", repo, "--name", "shop-api", "--description", "x"], deps)).toBe(1);
