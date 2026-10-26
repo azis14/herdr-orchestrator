@@ -3,16 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { closeAgents, findDormant, formatDormant, parseDuration } from "./src/cleanup";
+import { closeAgents, findDormant, formatAge, formatDormant, parseDuration } from "./src/cleanup";
 import { vscodeRunner, type EditorRunner } from "./src/editor";
 import { OrchError } from "./src/errors";
+import { resolveFolder } from "./src/folders";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
 import { openProject, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
-import { addProject, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
+import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
+import { listFolderEntries, listProjects, listSessions } from "./src/sessions";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
 import { detect, formatDetection } from "./src/setup";
 import { spawnJobAgent } from "./src/spawn";
@@ -49,6 +51,11 @@ const USAGE = `usage: bun orch.ts <command>
   status [--json]                every agent across workspaces, by project and job
   cleanup [workspace...] [--idle D] [--json] | cleanup --close <pick...>
                                  list dormant agents (idle D, default 1h) with a pick for each; close approved picks
+  folders <project> [agent] [--with-sessions] [--json]
+                                 the project's base folder and git worktrees, with the agent's sessions in each
+  sessions <project> [agent] [--folder F] [--json]
+                                 the agent's sessions started in a folder (default: the base folder), newest first
+  project list [--json]          registered projects, most recently used first
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
   project remove <name>          unregister a project (refused while an unfinished job includes it)
@@ -161,7 +168,15 @@ const commands: Record<string, Command> = {
 
   async project(args, deps) {
     const [sub, ...rest] = args;
-    const usage = "usage: project add <path> --description D [--name N] [--context a,b,c] | project remove <name>";
+    const usage =
+      "usage: project list [--json] | project add <path> --description D [--name N] [--context a,b,c] | project remove <name>";
+    if (sub === "list") {
+      const { values } = parseArgs({ args: rest, options: { json: { type: "boolean" } } });
+      const rows = listProjects(deps);
+      const ago = (iso: string | null) => (iso ? `${formatAge(deps.now().getTime() - Date.parse(iso))} ago` : "never");
+      deps.out(values.json ? JSON.stringify(rows, null, 2) : rows.map((r) => `${r.name}  ${ago(r.lastUsed)}  ${r.description}`).join("\n"));
+      return 0;
+    }
     if (sub === "remove") {
       if (rest.length !== 1) throw new OrchError(usage);
       const p = removeProject(path.join(deps.root, "registry"), deps.root, rest[0]);
@@ -186,6 +201,54 @@ const commands: Record<string, Command> = {
       context: (values.context ?? "").split(",").map((c) => c.trim()).filter(Boolean),
     });
     deps.out(JSON.stringify(p, null, 2));
+    return 0;
+  },
+
+  async folders(args, deps) {
+    const usage = "usage: folders <project> [agent] [--with-sessions] [--json]";
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { "with-sessions": { type: "boolean" }, json: { type: "boolean" } },
+    });
+    const [project, agent] = positionals;
+    if (!project || positionals.length > 2) throw new OrchError(usage);
+    const p = getProject(deps.reg, project);
+    const rows = await listFolderEntries(deps, p, getAgent(deps.reg, agent, p), { withSessions: !!values["with-sessions"] });
+    if (values.json) {
+      deps.out(JSON.stringify(rows, null, 2));
+      return 0;
+    }
+    const ago = (iso: string | null) => (iso ? `last ${formatAge(deps.now().getTime() - Date.parse(iso))} ago` : "never used");
+    for (const f of rows) {
+      const job = f.job ? `  job ${f.job.id}${f.job.live ? ", agent live" : ""}` : "";
+      deps.out(`${f.base ? "base" : "worktree"}  ${f.path}  ${f.branch ?? "?"}  ${f.sessions} session${f.sessions === 1 ? "" : "s"}, ${ago(f.lastUsed)}${job}`);
+    }
+    return 0;
+  },
+
+  async sessions(args, deps) {
+    const usage = "usage: sessions <project> [agent] [--folder F] [--json]";
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { folder: { type: "string" }, json: { type: "boolean" } },
+    });
+    const [project, agent] = positionals;
+    if (!project || positionals.length > 2) throw new OrchError(usage);
+    const p = getProject(deps.reg, project);
+    const folder = await resolveFolder(deps.git, p, values.folder);
+    const rows = await listSessions(deps, p, getAgent(deps.reg, agent, p), folder.path);
+    if (values.json) {
+      deps.out(JSON.stringify(rows, null, 2));
+      return 0;
+    }
+    if (!rows.length) deps.out(`no sessions in ${folder.path}`);
+    for (const s of rows) {
+      const open = s.openIn ? `  [open in ${s.openIn.workspace} tab ${s.openIn.tabId}]` : "";
+      const when = formatAge(deps.now().getTime() - Date.parse(s.lastAt));
+      deps.out(`${s.id}  ${when} ago  ${s.branch ?? "-"}  ${s.title}${open}`);
+    }
     return 0;
   },
 

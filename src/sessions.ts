@@ -1,7 +1,12 @@
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
+import type { Deps } from "../orch";
 import { lastMessage, newest, readEntries, type Entry } from "./activity";
+import { OrchError } from "./errors";
+import { listFolders, type Folder } from "./folders";
+import { openJobs } from "./jobs";
+import type { AgentDef, Project } from "./registry";
 
 /** A past agent conversation that can be resumed. */
 export interface Session {
@@ -193,4 +198,90 @@ export function cursorSessions(cursorChats: string, folder: string): Session[] {
 export function cursorFolderStats(cursorChats: string, folder: string): FolderStats {
   const dirs = cursorChatDirs(cursorChats, folder);
   return { count: dirs.length, lastUsed: newestMtime(dirs.flatMap((d) => [path.join(d, "store.db"), path.join(d, "store.db-wal")])) };
+}
+
+// --- Listings -------------------------------------------------------------------------------------
+
+export type SessionDeps = Pick<Deps, "herdr" | "git" | "root" | "claudeProjects" | "cursorChats" | "reg">;
+
+/** A folder with how much the agent has been used there, and the job that owns it, if any. */
+export interface FolderEntry extends Folder {
+  lastUsed: string | null;
+  sessions: number;
+  job?: { id: string; live: boolean };
+}
+
+const READERS: Record<string, { sessions: typeof claudeSessions; stats: typeof claudeFolderStats; root: (d: SessionDeps) => string }> = {
+  claude: { sessions: claudeSessions, stats: claudeFolderStats, root: (d) => d.claudeProjects },
+  cursor: { sessions: cursorSessions, stats: cursorFolderStats, root: (d) => d.cursorChats },
+};
+
+function reader(a: AgentDef) {
+  const r = READERS[a.kind];
+  if (!r) throw new OrchError(`can't list sessions for agent kind ${a.kind}`);
+  return r;
+}
+
+/** The agent's sessions launched in `folder`, newest first, each marked with the live Herdr agent running it, if any. */
+export async function listSessions(d: SessionDeps, p: Project, a: AgentDef, folder: string): Promise<Session[]> {
+  const r = reader(a);
+  const sessions = r.sessions(r.root(d), folder);
+  const live = (await d.herdr.listAgents()).filter((x) => x.agent_session?.value);
+  if (!live.length) return sessions;
+  const labels = new Map((await d.herdr.listWorkspaces()).map((w) => [w.workspace_id, w.label]));
+  for (const s of sessions) {
+    const x = live.find((x) => x.agent_session!.value === s.id);
+    if (x) s.openIn = { agentName: x.name ?? x.pane_id, workspace: labels.get(x.workspace_id) ?? x.workspace_id, tabId: x.tab_id };
+  }
+  return sessions;
+}
+
+/**
+ * The project's folders with the agent's session count and last use in each: base first, then worktrees most
+ * recently used first, never-used ones last by path. `withSessions` drops worktrees with no sessions (never the base).
+ */
+export async function listFolderEntries(
+  d: SessionDeps,
+  p: Project,
+  a: AgentDef,
+  o: { withSessions: boolean },
+): Promise<FolderEntry[]> {
+  const r = reader(a);
+  const jobWorktrees = openJobs(d.root).flatMap((j) =>
+    j.agents.filter((x) => x.worktreePath).map((x) => ({ id: j.id, agentName: x.agentName, path: path.resolve(x.worktreePath!) })),
+  );
+  const liveNames = jobWorktrees.length ? new Set((await d.herdr.listAgents()).map((x) => x.name)) : new Set<string>();
+
+  const entries = (await listFolders(d.git, p)).map((f): FolderEntry => {
+    const stats = r.stats(r.root(d), f.path);
+    const e: FolderEntry = { ...f, lastUsed: stats.lastUsed?.toISOString() ?? null, sessions: stats.count };
+    const job = jobWorktrees.find((j) => j.path === f.path);
+    if (job) e.job = { id: job.id, live: liveNames.has(job.agentName) };
+    return e;
+  });
+  const [base, ...worktrees] = entries;
+  const kept = o.withSessions ? worktrees.filter((f) => f.sessions > 0) : worktrees;
+  kept.sort(
+    (x, y) =>
+      Number(x.lastUsed === null) - Number(y.lastUsed === null) ||
+      (y.lastUsed ?? "").localeCompare(x.lastUsed ?? "") ||
+      x.path.localeCompare(y.path),
+  );
+  return [base, ...kept];
+}
+
+/** Registered projects, most recently used first (any registered agent, base folder), then by name. */
+export function listProjects(d: SessionDeps): Array<{ name: string; path: string; description: string; lastUsed: string | null }> {
+  const kinds = [...new Set(d.reg.agents.map((a) => a.kind))].filter((k) => READERS[k]);
+  const rows = d.reg.projects.map((p) => {
+    const times = kinds.map((k) => READERS[k].stats(READERS[k].root(d), p.path).lastUsed?.getTime() ?? 0);
+    const t = Math.max(0, ...times);
+    return { name: p.name, path: p.path, description: p.description, lastUsed: t ? new Date(t).toISOString() : null };
+  });
+  return rows.sort(
+    (x, y) =>
+      Number(x.lastUsed === null) - Number(y.lastUsed === null) ||
+      (y.lastUsed ?? "").localeCompare(x.lastUsed ?? "") ||
+      x.name.localeCompare(y.name),
+  );
 }

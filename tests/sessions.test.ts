@@ -3,7 +3,21 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { claudeDirName, claudeFolderStats, claudeSessions, cursorDirName, cursorFolderStats, cursorSessions } from "../src/sessions";
+import { OrchError } from "../src/errors";
+import type { GitRunner } from "../src/git";
+import { newJob, setStage, upsertAgent } from "../src/jobs";
+import {
+  claudeDirName,
+  claudeFolderStats,
+  claudeSessions,
+  cursorDirName,
+  cursorFolderStats,
+  cursorSessions,
+  listFolderEntries,
+  listProjects,
+  listSessions,
+} from "../src/sessions";
+import { ok, testDeps, testRegistry, ws } from "./fakes";
 
 const tmp = (name: string) => fs.mkdtempSync(path.join(os.tmpdir(), `orch-${name}-`));
 
@@ -218,5 +232,103 @@ describe("cursorFolderStats", () => {
     makeChat(root, "/r/ocr", "b", { agentId: "b", name: "B", createdAt: 1 }, new Date("2026-10-02T00:00:00Z"));
     expect(cursorFolderStats(root, "/r/ocr")).toEqual({ count: 2, lastUsed: new Date("2026-10-02T00:00:00Z") });
     expect(cursorFolderStats(root, "/r/none")).toEqual({ count: 0, lastUsed: null });
+  });
+});
+
+describe("listSessions", () => {
+  test("marks sessions a live Herdr agent is running", async () => {
+    const { deps } = testDeps({
+      "agent list": () => ok({ agents: [{ name: "claude-2", agent: "claude", agent_status: "idle", cwd: "/x", pane_id: "w5:p3", tab_id: "w5:t3", workspace_id: "w5", agent_session: { value: "live" } }] }),
+      "workspace list": () => ok({ workspaces: [ws("w5", "shop-api", 2)] }),
+    });
+    const p = deps.reg.projects[0];
+    transcript(deps.claudeProjects, p.path, "live", [user("a", p.path, "2026-10-02T00:00:00Z")]);
+    transcript(deps.claudeProjects, p.path, "idle", [user("b", p.path, "2026-10-01T00:00:00Z")]);
+    const s = await listSessions(deps, p, deps.reg.agents[0], p.path);
+    expect(s.map((x) => [x.id, x.openIn])).toEqual([
+      ["live", { agentName: "claude-2", workspace: "shop-api", tabId: "w5:t3" }],
+      ["idle", undefined],
+    ]);
+  });
+
+  test("an agent kind with no session reader is refused", async () => {
+    const { deps } = testDeps();
+    const p = deps.reg.projects[0];
+    const err = await listSessions(deps, p, { name: "aider", kind: "aider", openArgs: [], jobArgs: [] }, p.path).catch((e) => e);
+    expect(err).toBeInstanceOf(OrchError);
+    expect(err.message).toContain("can't list sessions for agent kind aider");
+  });
+});
+
+/** Fake git listing `p.path` plus the given worktrees (real temp dirs). */
+const worktreeGit = (base: string, wts: string[]): GitRunner => async () => ({
+  code: 0,
+  stdout: [base, ...wts].map((w, i) => `worktree ${w}\nHEAD 1111111\nbranch refs/heads/b${i}\n`).join("\n"),
+  stderr: "",
+});
+
+function touchSession(root: string, folder: string, id: string, mtime: string) {
+  const f = transcript(root, folder, id, [user("x", folder, mtime)]);
+  fs.utimesSync(f, new Date(mtime), new Date(mtime));
+}
+
+describe("listFolderEntries", () => {
+  test("base first, then most recently used, never-used last; withSessions drops empty worktrees", async () => {
+    const [wtOld, wtNew, wtNone] = [tmp("wt-old"), tmp("wt-new"), tmp("wt-none")];
+    const { deps } = testDeps();
+    const p = deps.reg.projects[0];
+    deps.git = worktreeGit(p.path, [wtNone, wtOld, wtNew]);
+    touchSession(deps.claudeProjects, wtOld, "o1", "2026-10-01T00:00:00Z");
+    touchSession(deps.claudeProjects, wtNew, "n1", "2026-10-03T00:00:00Z");
+    touchSession(deps.claudeProjects, wtNew, "n2", "2026-10-04T00:00:00Z");
+    const all = await listFolderEntries(deps, p, deps.reg.agents[0], { withSessions: false });
+    expect(all.map((f) => [f.path, f.sessions, f.lastUsed])).toEqual([
+      [p.path, 0, null],
+      [wtNew, 2, "2026-10-04T00:00:00.000Z"],
+      [wtOld, 1, "2026-10-01T00:00:00.000Z"],
+      [wtNone, 0, null],
+    ]);
+    const used = await listFolderEntries(deps, p, deps.reg.agents[0], { withSessions: true });
+    expect(used.map((f) => f.path)).toEqual([p.path, wtNew, wtOld]);
+  });
+
+  test("labels a job's worktree, live or not; a finished job's isn't labelled", async () => {
+    const [wtA, wtB] = [tmp("wt-a"), tmp("wt-b")];
+    const { deps } = testDeps({
+      "agent list": () => ok({ agents: [{ name: "shop-api-a-1111", agent: "claude", agent_status: "idle", cwd: wtA, pane_id: "w1:p1", tab_id: "w1:t1", workspace_id: "w1" }] }),
+    });
+    const p = deps.reg.projects[0];
+    deps.git = worktreeGit(p.path, [wtA, wtB]);
+    const now = new Date(2026, 9, 23);
+    const agentAt = (name: string, worktreePath: string) => ({
+      project: "shop-api", agent: "claude", agentName: name, workspaceId: "w1", tabId: "w1:t1", paneId: "w1:p1",
+      mode: "herdr-worktree" as const, worktreePath, status: "started",
+    });
+    const a = newJob(deps.root, deps.reg, { slug: "a", title: "A", request: "a", projects: ["shop-api"], now });
+    upsertAgent(deps.root, a.id, agentAt("shop-api-a-1111", wtA));
+    const b = newJob(deps.root, deps.reg, { slug: "b", title: "B", request: "b", projects: ["shop-api"], now });
+    upsertAgent(deps.root, b.id, agentAt("shop-api-b-2222", wtB));
+    const entries = await listFolderEntries(deps, p, deps.reg.agents[0], { withSessions: false });
+    const job = (dir: string) => entries.find((f) => f.path === dir)?.job;
+    expect(job(wtA)).toEqual({ id: a.id, live: true });
+    expect(job(wtB)).toEqual({ id: b.id, live: false });
+    setStage(deps.root, b.id, "done");
+    const after = await listFolderEntries(deps, p, deps.reg.agents[0], { withSessions: false });
+    expect(after.find((f) => f.path === wtB)?.job).toBeUndefined();
+  });
+});
+
+describe("listProjects", () => {
+  test("most recently used first, unused last, ties by name", () => {
+    const { deps } = testDeps();
+    deps.reg = testRegistry(["zeta", "alpha", "mid"]);
+    const [zeta, , mid] = deps.reg.projects;
+    touchSession(deps.claudeProjects, mid.path, "m", "2026-10-01T00:00:00Z");
+    makeChat(deps.cursorChats, zeta.path, "z", { agentId: "z", name: "Z", createdAt: 1 }, new Date("2026-10-05T00:00:00Z"));
+    expect(listProjects(deps).map((x) => [x.name, x.lastUsed])).toEqual([
+      ["zeta", "2026-10-05T00:00:00.000Z"],
+      ["mid", "2026-10-01T00:00:00.000Z"],
+      ["alpha", null],
+    ]);
   });
 });

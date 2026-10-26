@@ -355,3 +355,42 @@ describe("cli registry", () => {
     expect(t.err.join("\n")).toContain("run /setup first");
   });
 });
+
+describe("cli listings", () => {
+  test("folders --json starts with the base folder", async () => {
+    const { deps, out } = testDeps();
+    expect(await main(["folders", "shop-api", "--json"], deps)).toBe(0);
+    const rows = JSON.parse(out.join("\n"));
+    expect(rows[0]).toMatchObject({ path: deps.reg.projects[0].path, base: true, sessions: 0, lastUsed: null });
+  });
+
+  test("folders text names the base folder", async () => {
+    const { deps, out } = testDeps();
+    expect(await main(["folders", "shop-api"], deps)).toBe(0);
+    expect(out.join("\n")).toContain("base");
+  });
+
+  test("sessions refuses a folder that isn't the project's", async () => {
+    const { deps, err } = testDeps();
+    expect(await main(["sessions", "shop-api", "--folder", "/nope"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("is not a folder of shop-api");
+  });
+
+  test("sessions --json on an empty folder is an empty list", async () => {
+    const { deps, out } = testDeps();
+    expect(await main(["sessions", "shop-api", "cursor", "--json"], deps)).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toEqual([]);
+  });
+
+  test("project list --json lists every project", async () => {
+    const { deps, out } = testDeps();
+    expect(await main(["project", "list", "--json"], deps)).toBe(0);
+    expect(JSON.parse(out.join("\n")).map((p: { name: string }) => p.name)).toEqual(["shop-api", "shop-ui"]);
+  });
+
+  test("project usage mentions list", async () => {
+    const { deps, err } = testDeps();
+    expect(await main(["project", "frobnicate"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("project list");
+  });
+});
