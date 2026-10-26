@@ -1,0 +1,10 @@
+{
+  "projects": [
+    {
+      "name": "shop-api",
+      "path": "/home/user/repos/shop-api",
+      "description": "Example API (Go + Echo)",
+      "context": ["CLAUDE.md", "docs"]
+    }
+  ]
+}

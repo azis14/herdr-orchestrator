@@ -42,9 +42,13 @@ function project(name: string, p: string, extra: object = {}) {
 }
 
 describe("registry", () => {
-  test("loads the real registry", () => {
-    const reg = loadRegistry();
-    expect(reg.projects.map((p) => p.name)).toEqual(expect.arrayContaining(["shop2.0", "shop-api", "shop-ui"]));
+  test("loads the example registry", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orch-example-"));
+    for (const f of ["agents", "projects"]) {
+      fs.copyFileSync(path.join(ORCH_ROOT, `registry/${f}-example.json`), path.join(dir, `${f}.json`));
+    }
+    const reg = loadRegistry(dir);
+    expect(reg.projects.map((p) => p.name)).toEqual(["shop-api"]);
     expect(reg.agents.map((a) => a.name)).toEqual(["claude", "cursor"]);
     expect(reg.defaultAgent).toBe("claude");
     // job agents: Cursor runs everything and skips the workspace-trust dialog (new worktrees are untrusted)
@@ -137,8 +141,8 @@ describe("addProject", () => {
     ...extra,
   });
 
-  test("formatProjectsJson round-trips the real projects.json byte-for-byte", () => {
-    const text = fs.readFileSync(path.join(ORCH_ROOT, "registry/projects.json"), "utf8");
+  test("formatProjectsJson round-trips projects-example.json byte-for-byte", () => {
+    const text = fs.readFileSync(path.join(ORCH_ROOT, "registry/projects-example.json"), "utf8");
     expect(formatProjectsJson(JSON.parse(text))).toBe(text);
   });
 
