@@ -29,6 +29,8 @@ Then, for example:
 /open my-service                 # your default agent in a new tab of the project's workspace
 /open my-service cursor          # or a specific agent
 /open my-service --topic "login bug"   # tab labelled with a topic
+/open my-service --continue      # pick up the newest session (asks which worktree first, if there are any)
+/open my-service --resume        # pick a past session from a list
 /status                          # every agent, by project and job
 /job add a status field to the orders API and show it in the UI
 ```
@@ -39,9 +41,9 @@ Then, for example:
 | --- | --- |
 | `/setup` | First-time setup: checks prerequisites, picks your agents and default, registers your repos. Safe to run again. |
 | `/intro` | A short explanation of this tool. |
-| `/open <project> [agent] [--topic T]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to your default agent. The agent is named after its kind (`claude`, then `claude-2`, ... since Herdr names are session-wide); the tab is labelled `T` if given, else Herdr numbers it as usual. |
-| `/bash <project> [--topic T]` | Same tab placement, a plain terminal with no agent. |
-| `/code <project \| path \| .>` | Opens a project's repo, or any directory, in VS Code. |
+| `/open [project] [agent] [--continue \| --resume] [--topic T]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to your default agent. If the project has git worktrees, it first asks which folder: the base folder or a worktree. `--continue` resumes the newest session in that folder; `--resume` lets you pick one. The agent is named after its kind (`claude`, then `claude-2`, ... since Herdr names are session-wide); the tab is labelled `T` if given, else Herdr numbers it as usual. |
+| `/bash [project] [--topic T]` | Same tab placement and folder question, a plain terminal with no agent. |
+| `/code [project \| path \| .]` | Opens a project's repo, or any directory, in VS Code. |
 | `/status` | Shows every Herdr agent mapped to its project and job, plus what each open job is waiting on. |
 | `/cleanup [workspace...]` | Lists dormant agents and closes only the ones you approve. |
 | `/register <path> [name]` | Reads the repo, proposes a name, description and context files, and saves them after you approve. |
@@ -49,16 +51,21 @@ Then, for example:
 | `/agent add\|default\|remove <name>` | Adds Claude or Cursor, switches the default agent, or removes one. |
 | `/job <request>` | Starts a cross-project job. Also `/job list`, `/job show <id>`, `/job resume <id>`. |
 
+Whenever a command needs you to choose (a project, a folder, a session, which agents to close, approving a design), it shows the options as a picker rather than asking you to type. Leave out the project and the command asks for it.
+
 ## CLI
 
 ```
-bun orch.ts open <project> [agent] [--topic T]
-bun orch.ts bash <project> [--topic T]
+bun orch.ts open <project> [agent] [--topic T] [--folder F] [--continue | --resume ID]
+bun orch.ts bash <project> [--topic T] [--folder F]
+bun orch.ts folders <project> [agent] [--with-sessions] [--json]
+bun orch.ts sessions <project> [agent] [--folder F] [--json]
 bun orch.ts code <project | path | .>
 bun orch.ts status [--json]
 bun orch.ts cleanup [workspace...] [--idle 1h] [--json] | cleanup --close <pick...>
 bun orch.ts setup [--json]
 bun orch.ts agent add <claude|cursor> | agent default <name> | agent remove <name>
+bun orch.ts project list [--json]
 bun orch.ts project add <path> --description D [--name N] [--context a,b,c]
 bun orch.ts project remove <name>
 bun orch.ts skills [project] [--resolve <skill>] [--json]

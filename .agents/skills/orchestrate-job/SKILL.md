@@ -44,8 +44,8 @@ Wait on agents (`herdr agent wait <name> --timeout …`, or poll `orch status --
 |---|---|
 | A question about **another repo** in the job ("what does this endpoint return?") | Answer from that repo: ask its agent (`herdr agent prompt`) or read its code. Relay the answer and `orch job log` it. |
 | That answer is a **guess**, not confirmed in code | Take it to the user as a suggested answer. |
-| **Intent, scope or priority** ("should this paginate?") | Take it to the user. Batch questions across agents, tagged `[project]`, most important first. Forward each answer to the asking agent, attributed to the user, and log it. |
-| A **permission or approval dialog** | Take it to the user with the agent, the project and the exact request. Send only their answer. |
+| **Intent, scope or priority** ("should this paginate?") | Take it to the user. Batch questions across agents, tagged `[project]`, most important first. A question with a set of options (the agent's own multiple choice) goes as AskUserQuestion with those options. Forward each answer to the asking agent, attributed to the user, and log it. |
+| A **permission or approval dialog** | Take it to the user with AskUserQuestion: the agent, the project and the exact request in the question, the dialog's own options as the options. Send only the option they pick. |
 | A **gate reserved for named maintainers** | Pause it and tell the user whose approval is needed. |
 
 When the user gives new instructions for any agent, forward them with `herdr agent prompt` and log them.
@@ -60,11 +60,11 @@ Fill `jobs/<id>/summary.md` as you go:
 
 ## 5. Approval stop: designs
 
-`orch job stage <id> design-review`. Present the summary and the design links, and wait. On approval → `orch job stage <id> plan`. On change requests, forward them to the agents and loop.
+`orch job stage <id> design-review`. Present the summary and the design links, then ask with AskUserQuestion: "Approve" / "Request changes" / "Stop here". On "Approve" → `orch job stage <id> plan`. On "Request changes", ask what to change (free text), forward it to the agents and loop. On "Stop here", leave the job at its stage.
 
 ## 6. Plan
 
-Resolve `writing-plans` per repo and prompt each agent to plan from its approved design. Record `planPath=`, add the plans to the summary, then `orch job stage <id> plan-review` → stop for approval → `orch job stage <id> build`.
+Resolve `writing-plans` per repo and prompt each agent to plan from its approved design. Record `planPath=`, add the plans to the summary, then `orch job stage <id> plan-review` → ask the same "Approve" / "Request changes" / "Stop here" question → on "Approve", `orch job stage <id> build`.
 
 ## 7. Build
 
@@ -74,7 +74,7 @@ Resolve `writing-plans` per repo and prompt each agent to plan from its approved
 
 ## 8. Integrate
 
-`orch job stage <id> integrate`. For each repo, follow its push/MR rule if it has one; if it has none, ask the user whether to push and open an MR. Then ask before cleaning up, and finish with `orch job stage <id> done`.
+`orch job stage <id> integrate`. For each repo, follow its push/MR rule if it has one; if it has none, ask the user whether to push and open an MR (a yes/no AskUserQuestion). Then ask before cleaning up (also yes/no), and finish with `orch job stage <id> done`.
 
 **Cleanup scope:** close a job agent's workspace only if its record has `createdWorkspace: true`. Otherwise the workspace is the user's (e.g. a repo-worktree job's), so close only the record's `tabId`. Remove a worktree only if the job created it (`mode: herdr-worktree`); a `repo-worktree` worktree follows the repo's own cleanup flow.
 
