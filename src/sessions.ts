@@ -229,7 +229,10 @@ export function cursorFolderStats(cursorChats: string, folder: string): FolderSt
 
 export type SessionDeps = Pick<Deps, "herdr" | "git" | "root" | "claudeProjects" | "cursorChats" | "reg">;
 
-/** A folder with how much the agent has been used there, and the job that owns it, if any. */
+/**
+ * A folder with how much the agent has been used there, and the job that owns it, if any. For worktrees `sessions`
+ * and `lastUsed` match `listSessions`; for the base folder they're rough (file counts and mtimes).
+ */
 export interface FolderEntry extends Folder {
   lastUsed: string | null;
   sessions: number;
@@ -278,7 +281,14 @@ export async function listFolderEntries(
   const liveNames = jobWorktrees.length ? new Set((await d.herdr.listAgents()).map((x) => x.name)) : new Set<string>();
 
   const entries = (await listFolders(d.git, p)).map((f): FolderEntry => {
-    const stats = r.stats(r.root(d), f.path);
+    let stats = r.stats(r.root(d), f.path);
+    // A worktree with anything on disk gets its real sessions counted, so `withSessions` never offers a folder with
+    // nothing to resume (Cursor helper chats, empty transcripts). The base folder is always offered, so its
+    // cheap numbers stay: parsing its whole history would make the listing slow.
+    if (!f.base && stats.count > 0) {
+      const sessions = r.sessions(r.root(d), f.path);
+      stats = { count: sessions.length, lastUsed: sessions.length ? new Date(sessions[0].lastAt) : null };
+    }
     const e: FolderEntry = { ...f, lastUsed: stats.lastUsed?.toISOString() ?? null, sessions: stats.count };
     const job = jobWorktrees.find((j) => j.path === f.path);
     if (job) e.job = { id: job.id, live: liveNames.has(job.agentName) };

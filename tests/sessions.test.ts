@@ -319,6 +319,23 @@ describe("listFolderEntries", () => {
     expect(used.map((f) => f.path)).toEqual([p.path, wtNew, wtOld]);
   });
 
+  test("worktree counts match what sessions lists: helper chats and empty transcripts don't count", async () => {
+    const [wtHelper, wtEmpty, wtReal] = [tmp("wt-helper"), tmp("wt-empty"), tmp("wt-real")];
+    const { deps } = testDeps();
+    const p = deps.reg.projects[0];
+    deps.git = worktreeGit(p.path, [wtHelper, wtEmpty, wtReal]);
+    const cursor = deps.reg.agents[1];
+    makeChat(deps.cursorChats, wtHelper, "h", { agentId: "h", name: "New Agent", createdAt: 1, subagentInfo: { parentAgentId: "x" } });
+    makeChat(deps.cursorChats, wtReal, "r1", { agentId: "r1", name: "Real", createdAt: 1 }, new Date("2026-10-02T00:00:00Z"));
+    makeChat(deps.cursorChats, wtReal, "r2", { agentId: "r2", name: "Helper", createdAt: 1, subagentInfo: { parentAgentId: "r1" } });
+    const cur = await listFolderEntries(deps, p, cursor, { withSessions: true });
+    expect(cur.map((f) => [f.path, f.sessions])).toEqual([[p.path, 0], [wtReal, 1]]);
+
+    transcript(deps.claudeProjects, wtEmpty, "e", [{ type: "file-history-snapshot" }]);
+    const cl = await listFolderEntries(deps, p, deps.reg.agents[0], { withSessions: true });
+    expect(cl.map((f) => f.path)).toEqual([p.path]);
+  });
+
   test("labels a job's worktree, live or not; a finished job's isn't labelled", async () => {
     const [wtA, wtB] = [tmp("wt-a"), tmp("wt-b")];
     const { deps } = testDeps({
