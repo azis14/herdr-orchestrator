@@ -1,8 +1,9 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { claudeDirName, claudeFolderStats, claudeSessions } from "../src/sessions";
+import { claudeDirName, claudeFolderStats, claudeSessions, cursorDirName, cursorFolderStats, cursorSessions } from "../src/sessions";
 
 const tmp = (name: string) => fs.mkdtempSync(path.join(os.tmpdir(), `orch-${name}-`));
 
@@ -57,6 +58,15 @@ describe("claudeSessions", () => {
     expect(byId["s-custom"]).toBe("Mine");
     expect(byId["s-ai"]).toBe("Fix tax");
     expect(byId["s-prompt"]).toBe("Add a status field to the orders API and show it in the ord…");
+  });
+
+  test("a slash command with arguments is the title; one without is skipped", () => {
+    const root = tmp("claude");
+    transcript(root, F, "s-cmd", [
+      user("<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>", F, "2026-10-20T07:00:00Z"),
+      user("<command-message>mr-review</command-message>\n<command-name>/mr-review</command-name>\n<command-args>https://x/mr/1</command-args>", F, "2026-10-20T07:00:01Z"),
+    ]);
+    expect(claudeSessions(root, F)[0].title).toBe("/mr-review https://x/mr/1");
   });
 
   test("lastAt, branch and lastLine", () => {
@@ -133,5 +143,80 @@ describe("claudeFolderStats", () => {
 
   test("missing dir", () => {
     expect(claudeFolderStats(tmp("claude"), "/r/none")).toEqual({ count: 0, lastUsed: null });
+  });
+});
+
+
+const hex = (s: string) => Buffer.from(s, "utf8").toString("hex");
+
+/** Creates `<root>/<cursorDirName(folder)>/<id>/store.db` with meta row "0" (unless `meta` is null). */
+function makeChat(root: string, folder: string, id: string, meta: object | null, mtime?: Date): string {
+  const dir = path.join(root, cursorDirName(folder), id);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "store.db");
+  const db = new Database(file);
+  db.run("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+  db.run("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)");
+  if (meta) db.run("INSERT INTO meta (key, value) VALUES (?, ?)", ["0", hex(JSON.stringify(meta))]);
+  db.close();
+  if (mtime) fs.utimesSync(file, mtime, mtime);
+  return file;
+}
+
+describe("cursorSessions", () => {
+  const F = "/r/ocr";
+
+  test("cursorDirName is the md5 of the folder path", () => {
+    expect(cursorDirName("/home/azis/repos/aura-ui")).toBe("ad0cd2d926fb6dbc475a65ac3b9e4763");
+  });
+
+  test("named chats, newest first", () => {
+    const root = tmp("cursor");
+    makeChat(root, F, "c-old", { agentId: "c-old", name: "Bank Statement Extraction", createdAt: 1 }, new Date("2026-10-01T00:00:00Z"));
+    makeChat(root, F, "c-new", { agentId: "c-new", name: "Invoice OCR", createdAt: 2 }, new Date("2026-10-04T00:00:00Z"));
+    expect(cursorSessions(root, F)).toEqual([
+      { id: "c-new", title: "Invoice OCR", lastAt: "2026-10-04T00:00:00.000Z" },
+      { id: "c-old", title: "Bank Statement Extraction", lastAt: "2026-10-01T00:00:00.000Z" },
+    ]);
+  });
+
+  test("skips subagent chats", () => {
+    const root = tmp("cursor");
+    makeChat(root, F, "parent", { agentId: "parent", name: "Main", createdAt: 1 });
+    makeChat(root, F, "helper", { agentId: "helper", name: "New Agent", createdAt: 2, subagentInfo: { parentAgentId: "parent" } });
+    expect(cursorSessions(root, F).map((s) => s.id)).toEqual(["parent"]);
+  });
+
+  test("skips unreadable stores", () => {
+    const root = tmp("cursor");
+    makeChat(root, F, "good", { agentId: "good", name: "Good", createdAt: 1 });
+    makeChat(root, F, "no-meta", null);
+    const bad = path.join(root, cursorDirName(F), "garbage");
+    fs.mkdirSync(bad, { recursive: true });
+    fs.writeFileSync(path.join(bad, "store.db"), "not a db");
+    fs.mkdirSync(path.join(root, cursorDirName(F), "no-store"));
+    expect(cursorSessions(root, F).map((s) => s.id)).toEqual(["good"]);
+  });
+
+  test("lastAt uses the newer of store.db and store.db-wal", () => {
+    const root = tmp("cursor");
+    const db = makeChat(root, F, "c1", { agentId: "c1", name: "C", createdAt: 1 }, new Date("2026-10-01T00:00:00Z"));
+    fs.writeFileSync(`${db}-wal`, "");
+    fs.utimesSync(`${db}-wal`, new Date("2026-10-06T00:00:00Z"), new Date("2026-10-06T00:00:00Z"));
+    expect(cursorSessions(root, F)[0].lastAt).toBe("2026-10-06T00:00:00.000Z");
+  });
+
+  test("missing dir: no sessions", () => {
+    expect(cursorSessions(tmp("cursor"), "/r/none")).toEqual([]);
+  });
+});
+
+describe("cursorFolderStats", () => {
+  test("counts chats and takes the newest mtime", () => {
+    const root = tmp("cursor");
+    makeChat(root, "/r/ocr", "a", { agentId: "a", name: "A", createdAt: 1 }, new Date("2026-10-01T00:00:00Z"));
+    makeChat(root, "/r/ocr", "b", { agentId: "b", name: "B", createdAt: 1 }, new Date("2026-10-02T00:00:00Z"));
+    expect(cursorFolderStats(root, "/r/ocr")).toEqual({ count: 2, lastUsed: new Date("2026-10-02T00:00:00Z") });
+    expect(cursorFolderStats(root, "/r/none")).toEqual({ count: 0, lastUsed: null });
   });
 });

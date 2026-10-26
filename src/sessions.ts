@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { lastMessage, newest, readEntries, type Entry } from "./activity";
@@ -76,12 +77,21 @@ function promptText(e: ClaudeEntry): string | undefined {
   return text?.text as string | undefined;
 }
 
-/** The first thing the user actually typed: not a slash-command wrapper, caveat or meta entry. */
+/**
+ * The first thing the user actually typed: not a caveat or meta entry. A slash command counts only with
+ * arguments (`/mr-review <url>`), so `/clear` and the like are skipped.
+ */
 function firstPrompt(entries: ClaudeEntry[]): string | undefined {
   for (const e of entries) {
     if (e.type !== "user" || e.isMeta) continue;
     const text = promptText(e)?.trim();
-    if (!text || /^(<command-|<local-command|Caveat:)/.test(text)) continue;
+    if (!text || /^(<local-command|Caveat:)/.test(text)) continue;
+    if (/^<command-/.test(text)) {
+      const name = /<command-name>([^<]*)<\/command-name>/.exec(text)?.[1].trim();
+      const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1].trim();
+      if (name && args) return `${name} ${args}`;
+      continue;
+    }
     return text;
   }
   return undefined;
@@ -118,4 +128,69 @@ export function claudeSessions(claudeProjects: string, folder: string): Session[
 export function claudeFolderStats(claudeProjects: string, folder: string): FolderStats {
   const files = claudeTranscripts(claudeProjects, folder);
   return { count: files.length, lastUsed: newestMtime(files) };
+}
+
+// --- Cursor ---------------------------------------------------------------------------------------
+
+/** Cursor's chat-dir name for a folder: the md5 hex of its path. */
+export function cursorDirName(folder: string): string {
+  return new Bun.CryptoHasher("md5").update(folder).digest("hex");
+}
+
+function cursorChatDirs(cursorChats: string, folder: string): string[] {
+  const dir = path.join(cursorChats, cursorDirName(folder));
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => path.join(dir, d.name));
+  } catch {
+    return [];
+  }
+}
+
+interface CursorMeta {
+  name?: string;
+  createdAt?: number;
+  subagentInfo?: unknown;
+}
+
+/** The chat's meta row "0" (hex-encoded JSON), read-only. null if the store can't be opened or has none. */
+function readCursorMeta(store: string): CursorMeta | null {
+  if (!fs.existsSync(store)) return null;
+  let db: Database | undefined;
+  try {
+    db = new Database(store, { readonly: true });
+    const row = db.query("SELECT value FROM meta WHERE key = '0'").get() as { value?: string } | null;
+    if (!row?.value) return null;
+    const meta = JSON.parse(Buffer.from(row.value, "hex").toString("utf8"));
+    return meta && typeof meta === "object" ? meta : null;
+  } catch {
+    return null; // locked, corrupt or not a database: skip this chat
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * Cursor chats started in `folder`, newest first. Cursor's helper agents (meta `subagentInfo`) are not sessions.
+ * The meta only has `createdAt`, so `lastAt` is the newest mtime of `store.db` and its `-wal`.
+ */
+export function cursorSessions(cursorChats: string, folder: string): Session[] {
+  const sessions: Session[] = [];
+  for (const dir of cursorChatDirs(cursorChats, folder)) {
+    const store = path.join(dir, "store.db");
+    const meta = readCursorMeta(store);
+    if (!meta || meta.subagentInfo) continue;
+    const at = newestMtime([store, `${store}-wal`]) ?? (meta.createdAt ? new Date(meta.createdAt) : null);
+    if (!at) continue;
+    sessions.push({ id: path.basename(dir), title: shorten(meta.name || "(untitled)"), lastAt: at.toISOString() });
+  }
+  return sessions.sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+}
+
+/** Chat count and newest store mtime for `folder`. For ordering only: stores aren't opened. */
+export function cursorFolderStats(cursorChats: string, folder: string): FolderStats {
+  const dirs = cursorChatDirs(cursorChats, folder);
+  return { count: dirs.length, lastUsed: newestMtime(dirs.flatMap((d) => [path.join(d, "store.db"), path.join(d, "store.db-wal")])) };
 }

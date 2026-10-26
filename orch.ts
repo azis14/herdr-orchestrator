@@ -29,6 +29,8 @@ export interface Deps {
   editor: EditorRunner;
   /** Claude's transcript root (`~/.claude/projects`). */
   claudeProjects: string;
+  /** Cursor's chat root (`~/.cursor/chats`). */
+  cursorChats: string;
   children: ChildrenRunner;
   /** Where a binary is on PATH, or null. */
   which: (bin: string) => string | null;
@@ -349,6 +351,7 @@ if (import.meta.main) {
       git: gitRunner,
       editor: vscodeRunner,
       claudeProjects: path.join(os.homedir(), ".claude", "projects"),
+      cursorChats: path.join(os.homedir(), ".cursor", "chats"),
       children: procChildren,
       which: (bin) => Bun.which(bin),
       env: process.env,
