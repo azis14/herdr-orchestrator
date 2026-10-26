@@ -12,6 +12,7 @@ The control room for a Herdr session. From this one directory you can:
 - [Herdr](https://herdr.dev): the terminal workspace the agents live in. Run the orchestrator from inside a Herdr pane (`HERDR_ENV=1`).
 - git: job agents work in their own worktrees.
 - At least one agent CLI: [Claude Code](https://claude.com/claude-code) (`claude`) and/or [Cursor CLI](https://cursor.com/cli) (`cursor-agent`).
+- Recommended for jobs: Claude job agents use your own Claude Code permission settings. With `"permissions": { "defaultMode": "auto" }` in `~/.claude/settings.json` they rarely stop to ask; without it, expect a permission prompt for most edits and commands, each routed back to you. (Cursor job agents run with `--force`.)
 
 ## Getting started
 

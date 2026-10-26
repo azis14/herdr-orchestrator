@@ -54,6 +54,9 @@ const projectsFile = (dir: string) => path.join(dir, "projects.json");
 
 function readAgents(dir: string): AgentsFile {
   const data = readJson(agentsFile(dir));
+  if (!data || typeof data !== "object" || Array.isArray(data) || !Array.isArray(data.agents ?? [])) {
+    throw new OrchError(`registry/agents.json must be an object with an "agents" list`);
+  }
   return { defaultAgent: data.defaultAgent, agents: data.agents ?? [] };
 }
 
@@ -76,6 +79,8 @@ export function addAgent(dir: string, name: string): AgentDef {
   const data: AgentsFile = fs.existsSync(agentsFile(dir)) ? readAgents(dir) : { defaultAgent: name, agents: [] };
   if (data.agents.some((a) => a.name === name)) throw new OrchError(`agent "${name}" is already registered`);
   data.agents.push(preset.def);
+  // A hand-edited file may have no default, or one that isn't registered; either would not load.
+  if (!data.agents.some((a) => a.name === data.defaultAgent)) data.defaultAgent = name;
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(agentsFile(dir), formatAgentsJson(data));
   if (!fs.existsSync(projectsFile(dir))) fs.writeFileSync(projectsFile(dir), formatProjectsJson({ projects: [] }));

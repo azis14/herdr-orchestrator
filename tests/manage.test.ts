@@ -71,6 +71,22 @@ describe("addAgent", () => {
     expect(JSON.parse(read(dir, "projects.json"))).toEqual(projects);
   });
 
+  test("add repairs a missing or stale default", () => {
+    for (const before of [{}, { agents: [] }, { defaultAgent: "cursor", agents: [] }]) {
+      const dir = regDir(before, { projects: [] });
+      addAgent(dir, "claude");
+      expect(JSON.parse(read(dir, "agents.json"))).toEqual({ defaultAgent: "claude", agents: [CLAUDE] });
+    }
+  });
+
+  test("agents.json that isn't an object with an agents list is an OrchError", () => {
+    for (const bad of ["null", "[]", '{"agents": {}}']) {
+      const dir = regDir(bad, { projects: [] });
+      expect(() => addAgent(dir, "claude")).toThrow(OrchError);
+      expect(read(dir, "agents.json")).toBe(bad);
+    }
+  });
+
   test("add rejects unknown and duplicate agents", () => {
     const dir = regDir({ defaultAgent: "claude", agents: [CLAUDE] }, { projects: [] });
     expect(() => addAgent(dir, "codex")).toThrow("claude, cursor");
