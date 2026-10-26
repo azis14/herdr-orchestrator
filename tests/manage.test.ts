@@ -5,8 +5,8 @@ import path from "node:path";
 import { main } from "../orch";
 import { OrchError } from "../src/errors";
 import { saveJob, type Job, type Stage } from "../src/jobs";
-import { addAgent, AGENT_PRESETS, formatAgentsJson, removeAgent, setDefaultAgent } from "../src/manage";
-import { ORCH_ROOT } from "../src/registry";
+import { addAgent, AGENT_PRESETS, formatAgentsJson, removeAgent, removeProject, setDefaultAgent } from "../src/manage";
+import { formatProjectsJson, ORCH_ROOT } from "../src/registry";
 import { testDeps } from "./fakes";
 
 const [CLAUDE, CURSOR] = AGENT_PRESETS.map((p) => p.def);
@@ -145,5 +145,52 @@ describe("cli agent", () => {
     expect(t.out.at(-1)).toBe("removed agent claude");
     expect(await main(["agent", "bogus"], t.deps)).toBe(1);
     expect(t.err.at(-1)).toContain("usage: agent add <claude|cursor>");
+  });
+});
+
+describe("removeProject", () => {
+  function setup() {
+    const api = tmp("orch-shop-api-");
+    const projects = {
+      projects: [
+        { name: "shop-api", path: api, description: "API", context: ["CLAUDE.md"] },
+        { name: "shop-ui", path: "/home/user/repos/shop-ui", description: "UI", context: [] },
+      ],
+    };
+    const dir = regDir(both);
+    fs.writeFileSync(path.join(dir, "projects.json"), formatProjectsJson(projects));
+    return { dir, api };
+  }
+
+  test("removeProject drops only that entry and leaves the repo", () => {
+    const { dir, api } = setup();
+    expect(removeProject(dir, jobsRoot(), "shop-api").path).toBe(api);
+    const text = read(dir, "projects.json");
+    expect(JSON.parse(text).projects.map((p: { name: string }) => p.name)).toEqual(["shop-ui"]);
+    expect(formatProjectsJson(JSON.parse(text))).toBe(text);
+    expect(fs.existsSync(api)).toBe(true);
+  });
+
+  test("removeProject unknown name lists known names", () => {
+    const { dir } = setup();
+    expect(() => removeProject(dir, jobsRoot(), "nope")).toThrow("shop-api, shop-ui");
+  });
+
+  test("removeProject refuses while an unfinished job includes it", () => {
+    const { dir } = setup();
+    const before = read(dir, "projects.json");
+    const root = jobsRoot([job("20261023-plan", "plan", { projects: ["shop-ui", "shop-api"] })]);
+    expect(() => removeProject(dir, root, "shop-api")).toThrow("20261023-plan");
+    expect(read(dir, "projects.json")).toBe(before);
+    removeProject(dir, jobsRoot([job("20261023-old", "done", { projects: ["shop-api"] })]), "shop-api");
+  });
+
+  test("cli: project remove", async () => {
+    const t = testDeps();
+    const { dir, api } = setup();
+    fs.cpSync(dir, path.join(t.deps.root, "registry"), { recursive: true });
+    expect(await main(["project", "remove", "shop-api"], t.deps)).toBe(0);
+    expect(t.out.at(-1)).toBe(`removed project shop-api (${api})`);
+    expect(await main(["project", "remove"], t.deps)).toBe(1);
   });
 });

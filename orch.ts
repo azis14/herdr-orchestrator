@@ -9,7 +9,7 @@ import { OrchError } from "./src/errors";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
-import { addAgent, removeAgent, setDefaultAgent } from "./src/manage";
+import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
 import { openProject, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
@@ -48,6 +48,7 @@ const USAGE = `usage: bun orch.ts <command>
                                  list dormant agents (idle D, default 1h) with a pick for each; close approved picks
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
+  project remove <name>          unregister a project (refused while an unfinished job includes it)
   agent add <claude|cursor> | agent default <name> | agent remove <name>
                                  register an agent, make it the default, or remove it
   skills [project] [--resolve <skill>] [--json]
@@ -156,7 +157,13 @@ const commands: Record<string, Command> = {
 
   async project(args, deps) {
     const [sub, ...rest] = args;
-    const usage = "usage: project add <path> --description D [--name N] [--context a,b,c]";
+    const usage = "usage: project add <path> --description D [--name N] [--context a,b,c] | project remove <name>";
+    if (sub === "remove") {
+      if (rest.length !== 1) throw new OrchError(usage);
+      const p = removeProject(path.join(deps.root, "registry"), deps.root, rest[0]);
+      deps.out(`removed project ${p.name} (${p.path})`);
+      return 0;
+    }
     if (sub !== "add") throw new OrchError(usage);
     const { positionals, values } = parseArgs({
       args: rest,

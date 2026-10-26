@@ -109,3 +109,18 @@ export function removeAgent(dir: string, root: string, name: string): void {
   data.agents = data.agents.filter((a) => a.name !== name);
   fs.writeFileSync(agentsFile(dir), formatAgentsJson(data));
 }
+
+/** Removes a project's registry entry unless an unfinished job includes it. Never touches the repo, its worktrees or Herdr. */
+export function removeProject(dir: string, root: string, name: string): Project {
+  const data = readJson(projectsFile(dir));
+  const projects: Project[] = data.projects ?? [];
+  const project = projects.find((p) => p.name === name);
+  if (!project) {
+    throw new OrchError(`unknown project "${name}". Known projects: ${projects.map((p) => p.name).join(", ")}`);
+  }
+  const jobs = openJobs(root).filter((j) => j.projects.includes(name));
+  if (jobs.length) throw blockedByJobs(`project "${name}"`, jobs);
+  data.projects = projects.filter((p) => p.name !== name);
+  fs.writeFileSync(projectsFile(dir), formatProjectsJson(data));
+  return project;
+}
