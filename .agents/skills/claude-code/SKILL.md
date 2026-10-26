@@ -9,8 +9,8 @@ How the orchestrator drives a Claude Code (`claude`) agent running in a Herdr pa
 
 ## Start
 
-- **Interactive (the user takes over):** `bun /home/user/orchestrator/orch.ts open <project> claude`. This opens a new tab in the project's workspace (creating the workspace if needed) and starts Claude with its normal defaults. Add `--topic T` to label the tab. The output line names the agent, e.g. `claude` (or `claude-2` if that name is already live anywhere in Herdr).
-- **Job agent:** `bun /home/user/orchestrator/orch.ts job spawn <job-id> <project> claude [--repo-worktree]`. No extra args: job agents inherit the user's `defaultMode: auto` from `~/.claude/settings.json`, so they rarely stop for permission.
+- **Interactive (the user takes over):** `bun orch.ts open <project> claude`. This opens a new tab in the project's workspace (creating the workspace if needed) and starts Claude with its normal defaults. Add `--topic T` to label the tab. The output line names the agent, e.g. `claude` (or `claude-2` if that name is already live anywhere in Herdr).
+- **Job agent:** `bun orch.ts job spawn <job-id> <project> claude [--repo-worktree]`. No extra args: job agents inherit the user's `defaultMode: auto` from `~/.claude/settings.json`, so they rarely stop for permission.
 - **Startup trust dialog.** In a directory Claude hasn't been trusted in, it shows "Accessing workspace … Is this a project you created or one you trust?" with `❯ No, exit` selected. Herdr reports this as `blocked`, and `agent start` fails with `agent_not_ready`. Worktrees of an already-trusted repo don't show it. Never answer it yourself: tell the user which pane and directory, and send their answer only if they ask you to.
 - **After a failed job start,** the job records the agent as `start-failed`, with its pane and worktree. Once the dialog is answered and the agent is up, run `orch job spawn <job-id> <project>` again: it adopts the live agent without creating anything.
 
@@ -21,7 +21,7 @@ herdr agent prompt <name> "<task text>" --wait --timeout 600000
 ```
 
 - `--wait` returns at the first settled state: `idle`, `done`, or `blocked`. A timeout or `agent_prompt_stalled` doesn't prove the prompt was lost. Read the screen before resending anything.
-- **Pointing it at a skill.** Resolve the skill first: `bun /home/user/orchestrator/orch.ts skills <project> --resolve <skill>`.
+- **Pointing it at a skill.** Resolve the skill first: `bun orch.ts skills <project> --resolve <skill>`.
   - `repo <path>`: the repo has its own copy and Claude loads it natively. Invoke it by name: `/<skill> <task>`.
   - `orchestrator <path>`: say "Read and follow the skill at `<path>`" followed by the task.
 - **Job prompts always end with the stop rules** (below).
@@ -60,4 +60,4 @@ Stop rules (from the orchestrator):
 
 - It loads `CLAUDE.md`, `.claude/rules`, `.claude/skills` and `.claude/commands` from its working directory natively. It doesn't read `AGENTS.md` unless `CLAUDE.md` points to it.
 - Auto mode can still refuse or ask before risky actions (pushes, destructive commands). Those show up as `blocked`.
-- In a `--repo-worktree` job, Claude creates its own worktree using the repo's flow (e.g. shop2.0's `/work`). Afterwards, record it with `orch job agent <id> <name> worktreePath=… branch=…`.
+- In a `--repo-worktree` job, Claude creates its own worktree using the repo's flow (e.g. a repo's own worktree command). Afterwards, record it with `orch job agent <id> <name> worktreePath=… branch=…`.

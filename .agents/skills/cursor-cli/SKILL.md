@@ -9,8 +9,8 @@ How the orchestrator drives a Cursor CLI (`cursor-agent`) agent running in a Her
 
 ## Start
 
-- **Interactive (the user takes over):** `bun /home/user/orchestrator/orch.ts open <project> cursor`. Cursor starts with its normal defaults.
-- **Job agent:** `bun /home/user/orchestrator/orch.ts job spawn <job-id> <project> cursor [--repo-worktree]`. Job agents launch with `--force` (run everything not explicitly denied).
+- **Interactive (the user takes over):** `bun orch.ts open <project> cursor`. Cursor starts with its normal defaults.
+- **Job agent:** `bun orch.ts job spawn <job-id> <project> cursor [--repo-worktree]`. Job agents launch with `--force` (run everything not explicitly denied).
   - In a **job-created worktree** they also get `--trust`. Job worktrees are new directories, and without it every one of them stops at the trust dialog.
   - In **`--repo-worktree` mode** they start in the user's own checkout **without** `--trust`, because that flag would permanently trust the user's checkout. Check that pane for the trust dialog, as for an interactive agent (below).
 - The user's `~/.cursor/cli-config.json` has `approvalMode: "unrestricted"`, so the status bar shows **Run Everything** even without `--force`.
@@ -34,7 +34,7 @@ herdr agent prompt <name> "<task text>" --wait --timeout 600000
 ```
 
 - `--wait` returns at the first settled state. A timeout or `agent_prompt_stalled` doesn't prove the prompt was lost. Read the screen before resending.
-- **Pointing it at a skill.** Cursor doesn't load Claude skills, so **always** use the path form. Resolve it with `bun /home/user/orchestrator/orch.ts skills <project> --resolve <skill>`, then say "Read and follow the skill at `<path>`" followed by the task.
+- **Pointing it at a skill.** Cursor doesn't load Claude skills, so **always** use the path form. Resolve it with `bun orch.ts skills <project> --resolve <skill>`, then say "Read and follow the skill at `<path>`" followed by the task.
 - **Job prompts always end with the stop rules** (below).
 
 ## Read state and output
