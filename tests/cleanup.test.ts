@@ -214,7 +214,7 @@ describe("findDormant", () => {
     const { deps } = setup({ workspaces: [ws("w3", "shop2.0", 1), ws("w4", "devnotes", 2)] });
     const e = await findDormant(deps, { workspaces: ["nope"], idleMs: HOUR }).catch((e) => e);
     expect(e).toBeInstanceOf(OrchError);
-    expect(e.message).toContain("shop2.0, devnotes");
+    expect(e.message).toContain("devnotes, shop2.0");
   });
 
   test("design-review and integrate are skipped like plan-review", async () => {
