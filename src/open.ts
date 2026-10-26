@@ -1,6 +1,8 @@
 import { OrchError } from "./errors";
+import { resolveFolder, type Folder } from "./folders";
 import type { AgentInfo, Herdr, Placement, Workspace } from "./herdr";
-import { getAgent, getProject, type Registry } from "./registry";
+import { getAgent, getProject, type AgentDef, type Registry } from "./registry";
+import { listSessions, type Session, type SessionDeps } from "./sessions";
 
 export interface OpenResult {
   project: string;
@@ -66,10 +68,10 @@ export async function openTerminal(
   h: Herdr,
   reg: Registry,
   project: string,
-  o: { topic?: string } = {},
+  o: { topic?: string; cwd?: string } = {},
 ): Promise<TerminalResult> {
   const p = getProject(reg, project);
-  const { placement, createdWorkspace } = await placeTab(h, p.path, p.name, o.topic);
+  const { placement, createdWorkspace } = await placeTab(h, o.cwd ?? p.path, p.name, o.topic);
   if (createdWorkspace && o.topic) {
     try {
       await h.renameTab(placement.tabId, o.topic);
@@ -86,27 +88,74 @@ export async function openTerminal(
 /**
  * Open an agent on a project: a new tab in the project's workspace, creating the workspace if needed.
  * `cwd` defaults to the project's path. The agent is named after its kind (`claude`, `claude-2`, ...). `topic` labels the tab; without it herdr's default stays.
+ * `resume` is a session id: the agent starts with its `openArgs` plus its `resumeArgs` for that session.
  */
 export async function openProject(
   h: Herdr,
   reg: Registry,
   project: string,
   agent?: string,
-  o: { args?: string[]; name?: string; topic?: string; cwd?: string } = {},
+  o: { args?: string[]; name?: string; topic?: string; cwd?: string; resume?: string } = {},
 ): Promise<OpenResult> {
   const p = getProject(reg, project);
   const a = getAgent(reg, agent, p);
+  const args = o.args ?? (o.resume === undefined ? a.openArgs : [...a.openArgs, ...resumeArgs(a, o.resume)]);
   const name = o.name ?? nextAgentName(a.name, await h.listAgents());
   const { placement, createdWorkspace } = await placeTab(h, o.cwd ?? p.path, p.name, o.topic);
 
   try {
     if (createdWorkspace && o.topic) await h.renameTab(placement.tabId, o.topic);
-    await h.startAgent(name, a.kind, placement.paneId, o.args ?? a.openArgs);
+    await h.startAgent(name, a.kind, placement.paneId, args);
   } catch (e) {
     throw new OrchError(
       `${(e as Error).message}\n` +
-        `left open: workspace ${placement.workspaceId} tab ${placement.tabId} pane ${placement.paneId}`,
+        `left open: workspace ${placement.workspaceId} tab ${placement.tabId} pane ${placement.paneId} (agent ${name})`,
     );
   }
   return { project: p.name, agent: a.name, agentName: name, ...placement, createdWorkspace };
+}
+
+function requireResume(a: AgentDef): string[] {
+  if (!a.resumeArgs?.length) throw new OrchError(`agent ${a.name} can't resume sessions (no resumeArgs)`);
+  return a.resumeArgs;
+}
+
+/** The agent's `resumeArgs` for `session`. Refused when the agent has none. */
+function resumeArgs(a: AgentDef, session: string): string[] {
+  return requireResume(a).map((x) => x.replaceAll("{session}", session));
+}
+
+export interface AgentOpenResult extends OpenResult {
+  folder: Folder;
+  /** The session resumed, if any. */
+  session?: Session;
+}
+
+/**
+ * `open` as the CLI runs it: in `folder` (the base folder or one of the project's worktrees; default the base),
+ * optionally resuming the newest session there (`continue`) or a given one (`resume`). Nothing is opened when the
+ * folder or session is wrong.
+ */
+export async function openAgent(
+  d: SessionDeps,
+  project: string,
+  agent: string | undefined,
+  o: { topic?: string; folder?: string; continue?: boolean; resume?: string } = {},
+): Promise<AgentOpenResult> {
+  const p = getProject(d.reg, project);
+  const a = getAgent(d.reg, agent, p);
+  const folder = await resolveFolder(d.git, p, o.folder);
+  let session: Session | undefined;
+  if (o.continue || o.resume !== undefined) {
+    requireResume(a);
+    const sessions = await listSessions(d, p, a, folder.path);
+    session = o.continue ? sessions[0] : sessions.find((s) => s.id === o.resume);
+    if (!session) {
+      throw new OrchError(
+        o.continue ? `no ${a.name} sessions in ${folder.path}` : `no ${a.name} session ${o.resume} in ${folder.path}`,
+      );
+    }
+  }
+  const r = await openProject(d.herdr, d.reg, p.name, a.name, { topic: o.topic, cwd: folder.path, resume: session?.id });
+  return { ...r, folder, ...(session && { session }) };
 }

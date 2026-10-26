@@ -5,6 +5,7 @@ import path from "node:path";
 import { main } from "../orch";
 import { OrchError } from "../src/errors";
 import { newJob, upsertAgent } from "../src/jobs";
+import { claudeDirName } from "../src/sessions";
 import { ok, testDeps, ws } from "./fakes";
 
 describe("cli open", () => {
@@ -392,5 +393,43 @@ describe("cli listings", () => {
     const { deps, err } = testDeps();
     expect(await main(["project", "frobnicate"], deps)).toBe(1);
     expect(err.join("\n")).toContain("project list");
+  });
+});
+
+describe("cli open/bash folders and sessions", () => {
+  test("--continue and --resume together are refused", async () => {
+    const { deps, err } = testDeps();
+    expect(await main(["open", "shop-api", "--continue", "--resume", "s1"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("--continue and --resume can't be used together");
+  });
+
+  test("open --continue names the session and where else it's open", async () => {
+    const { deps, out } = testDeps({
+      "agent list": () =>
+        ok({ agents: [{ name: "claude-3", agent: "claude", agent_status: "idle", cwd: "/x", pane_id: "w5:p3", tab_id: "w5:t3", workspace_id: "w5", agent_session: { value: "s1" } }] }),
+    });
+    const p = deps.reg.projects[0].path;
+    const dir = path.join(deps.claudeProjects, claudeDirName(p));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "s1.jsonl"),
+      JSON.stringify({ type: "user", cwd: p, timestamp: "2026-10-01T00:00:00Z", message: { content: "Fix tax" } }) + "\n",
+    );
+    expect(await main(["open", "shop-api", "--continue"], deps)).toBe(0);
+    expect(out.join("\n")).toContain(`resumed "Fix tax" (s1) (also open in shop-api tab w5:t3)`);
+  });
+
+  test("bash --folder opens there; a foreign folder is refused", async () => {
+    let t = testDeps();
+    const base = t.deps.reg.projects[0].path;
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "orch-wt-"));
+    const git = async () => ({ code: 0, stdout: `worktree ${base}\nHEAD 1\nbranch refs/heads/dev\n\nworktree ${wt}\nHEAD 2\nbranch refs/heads/x\n`, stderr: "" });
+    t.deps.git = git;
+    expect(await main(["bash", "shop-api", "--folder", wt], t.deps)).toBe(0);
+    expect(t.run.calls.find((c) => c[0] === "tab" && c[1] === "create")).toContain(wt);
+    expect(t.out.join("\n")).toContain(`folder ${wt}`);
+    t = testDeps();
+    t.deps.git = git;
+    expect(await main(["bash", "shop-api", "--folder", "/tmp"], t.deps)).toBe(1);
   });
 });
