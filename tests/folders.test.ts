@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { OrchError } from "../src/errors";
 import { listFolders, resolveFolder } from "../src/folders";
-import type { GitRunner } from "../src/git";
+import { gitRunner, type GitRunner } from "../src/git";
 import { testRegistry } from "./fakes";
 
 const tmp = (name: string) => fs.mkdtempSync(path.join(os.tmpdir(), `orch-${name}-`));
@@ -90,5 +90,42 @@ describe("resolveFolder", () => {
     expect(err.message).toMatch(/is not a folder of shop-api/);
     expect(err.message).toContain(p.path);
     expect(err.message).toContain(wt1);
+  });
+});
+
+describe("listFolders with real git", () => {
+  /** A real repo with one linked worktree, in a temp dir. */
+  async function repoWithWorktree() {
+    const root = fs.realpathSync(tmp("git"));
+    const repo = path.join(root, "repo");
+    const sh = (cwd: string, ...args: string[]) => {
+      const r = Bun.spawnSync(["git", "-C", cwd, ...args], { stderr: "pipe" });
+      if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+    };
+    fs.mkdirSync(path.join(repo, "apps", "ui"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "apps", "ui", "x.txt"), "x");
+    sh(root, "init", "-q", "-b", "main", repo);
+    sh(repo, "-c", "user.name=t", "-c", "user.email=t@t", "add", ".");
+    sh(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+    sh(repo, "worktree", "add", "-q", "-b", "feature/x", path.join(root, "wt"));
+    return { root, repo, wt: path.join(root, "wt") };
+  }
+  const project = (p: string) => ({ name: "shop-api", path: p, description: "", context: [] });
+
+  test("a project at a repo's subfolder gets only its own folder", async () => {
+    const { repo } = await repoWithWorktree();
+    const sub = path.join(repo, "apps", "ui");
+    expect(await listFolders(gitRunner, project(sub))).toEqual([{ path: sub, branch: null, base: true }]);
+    expect(await resolveFolder(gitRunner, project(sub), repo).catch((e) => e)).toBeInstanceOf(OrchError);
+  });
+
+  test("a symlinked project path isn't listed twice", async () => {
+    const { root, repo, wt } = await repoWithWorktree();
+    const link = path.join(root, "link");
+    fs.symlinkSync(repo, link);
+    expect(await listFolders(gitRunner, project(link))).toEqual([
+      { path: link, branch: "main", base: true },
+      { path: wt, branch: "feature/x", base: false },
+    ]);
   });
 });
