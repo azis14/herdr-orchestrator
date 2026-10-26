@@ -279,6 +279,24 @@ describe("resuming a cleaned-up agent", () => {
     fs.rmSync(wt, { recursive: true });
   });
 
+  test("refuses to resume a session that's already open elsewhere", async () => {
+    const t = setup({
+      ...placed,
+      "agent list": () =>
+        ok({ agents: [{ name: "claude-3", agent: "claude", agent_status: "idle", cwd: "/x", pane_id: "w2:p4", tab_id: "w2:t4", workspace_id: "w2", agent_session: { value: "S1" } }] }),
+    });
+    const wt = tmp();
+    stopped(t, { worktreePath: wt, branch: "feature/x", lastCwd: wt, sessionId: "S1" });
+    const before = fs.readFileSync(path.join(t.deps.root, "jobs", t.job.id, "job.json"), "utf8");
+    const err = await spawnJobAgent(t.deps, t.job.id, "shop-api", undefined, o).catch((e) => e);
+    expect(err).toBeInstanceOf(OrchError);
+    expect(err.message).toMatch(/session S1 is already open in pane w2:p4 \(agent claude-3\)/);
+    expect(call(t.run, "workspace create")).toBeUndefined();
+    expect(call(t.run, "tab create")).toBeUndefined();
+    expect(fs.readFileSync(path.join(t.deps.root, "jobs", t.job.id, "job.json"), "utf8")).toBe(before);
+    fs.rmSync(wt, { recursive: true });
+  });
+
   test("resumes a repo-worktree agent in its own folder without worktreeArgs", async () => {
     const t = setup();
     const wt = tmp();
