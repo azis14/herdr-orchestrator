@@ -215,9 +215,36 @@ describe("cursorSessions", () => {
   test("lastAt uses the newer of store.db and store.db-wal", () => {
     const root = tmp("cursor");
     const db = makeChat(root, F, "c1", { agentId: "c1", name: "C", createdAt: 1 }, new Date("2026-10-01T00:00:00Z"));
-    fs.writeFileSync(`${db}-wal`, "");
+    fs.writeFileSync(`${db}-wal`, "not a real wal, but not empty");
     fs.utimesSync(`${db}-wal`, new Date("2026-10-06T00:00:00Z"), new Date("2026-10-06T00:00:00Z"));
     expect(cursorSessions(root, F)[0].lastAt).toBe("2026-10-06T00:00:00.000Z");
+  });
+
+  test("reading never writes next to the store (WAL-mode stores, like Cursor's)", () => {
+    const root = tmp("cursor");
+    const dir = path.join(root, cursorDirName(F), "wal");
+    fs.mkdirSync(dir, { recursive: true });
+    const store = path.join(dir, "store.db");
+    const db = new Database(store);
+    db.run("PRAGMA journal_mode=WAL");
+    db.run("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+    db.run("INSERT INTO meta (key, value) VALUES (?, ?)", ["0", hex(JSON.stringify({ agentId: "wal", name: "Walled", createdAt: 1 }))]);
+    db.close();
+    const when = new Date("2026-10-02T00:00:00Z");
+    fs.utimesSync(store, when, when);
+    const before = fs.readdirSync(dir).sort();
+    expect(cursorSessions(root, F)).toEqual([{ id: "wal", title: "Walled", lastAt: when.toISOString() }]);
+    expect(fs.readdirSync(dir).sort()).toEqual(before);
+    expect(fs.statSync(store).mtime).toEqual(when);
+  });
+
+  test("an empty -wal doesn't count as use", () => {
+    const root = tmp("cursor");
+    const store = makeChat(root, F, "c1", { agentId: "c1", name: "C", createdAt: 1 }, new Date("2026-10-01T00:00:00Z"));
+    fs.writeFileSync(`${store}-wal`, "");
+    fs.utimesSync(`${store}-wal`, new Date("2026-10-09T00:00:00Z"), new Date("2026-10-09T00:00:00Z"));
+    expect(cursorSessions(root, F)[0].lastAt).toBe("2026-10-01T00:00:00.000Z");
+    expect(cursorFolderStats(root, F).lastUsed).toEqual(new Date("2026-10-01T00:00:00Z"));
   });
 
   test("missing dir: no sessions", () => {

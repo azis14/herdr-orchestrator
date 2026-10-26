@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Deps } from "../orch";
 import { lastMessage, newest, readEntries, type Entry } from "./activity";
@@ -160,12 +161,20 @@ interface CursorMeta {
   subagentInfo?: unknown;
 }
 
-/** The chat's meta row "0" (hex-encoded JSON), read-only. null if the store can't be opened or has none. */
+/**
+ * The chat's meta row "0" (hex-encoded JSON). null if the store can't be read or has none.
+ * Cursor's stores are in WAL mode, where even a read-only open creates or touches `-wal` and `-shm` next to the
+ * store, so this reads a copy in a temp dir and never opens the original.
+ */
 function readCursorMeta(store: string): CursorMeta | null {
   if (!fs.existsSync(store)) return null;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "orch-cursor-read-"));
   let db: Database | undefined;
   try {
-    db = new Database(store, { readonly: true });
+    const copy = path.join(tmp, "store.db");
+    fs.copyFileSync(store, copy);
+    if (fileSize(`${store}-wal`) > 0) fs.copyFileSync(`${store}-wal`, `${copy}-wal`);
+    db = new Database(copy);
     const row = db.query("SELECT value FROM meta WHERE key = '0'").get() as { value?: string } | null;
     if (!row?.value) return null;
     const meta = JSON.parse(Buffer.from(row.value, "hex").toString("utf8"));
@@ -174,20 +183,36 @@ function readCursorMeta(store: string): CursorMeta | null {
     return null; // locked, corrupt or not a database: skip this chat
   } finally {
     db?.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+function fileSize(file: string): number {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** When the chat was last written: `store.db`, or its `-wal` if that holds anything (an empty one says nothing). */
+function cursorStoreFiles(dir: string): string[] {
+  const store = path.join(dir, "store.db");
+  return fileSize(`${store}-wal`) > 0 ? [store, `${store}-wal`] : [store];
 }
 
 /**
  * Cursor chats started in `folder`, newest first. Cursor's helper agents (meta `subagentInfo`) are not sessions.
- * The meta only has `createdAt`, so `lastAt` is the newest mtime of `store.db` and its `-wal`.
+ * The meta only has `createdAt`, so `lastAt` is the newest mtime of `store.db` and its non-empty `-wal`.
  */
 export function cursorSessions(cursorChats: string, folder: string): Session[] {
   const sessions: Session[] = [];
   for (const dir of cursorChatDirs(cursorChats, folder)) {
-    const store = path.join(dir, "store.db");
-    const meta = readCursorMeta(store);
+    // File times first: they must not see anything this read does.
+    const written = newestMtime(cursorStoreFiles(dir));
+    const meta = readCursorMeta(path.join(dir, "store.db"));
     if (!meta || meta.subagentInfo) continue;
-    const at = newestMtime([store, `${store}-wal`]) ?? (meta.createdAt ? new Date(meta.createdAt) : null);
+    const at = written ?? (meta.createdAt ? new Date(meta.createdAt) : null);
     if (!at) continue;
     sessions.push({ id: path.basename(dir), title: shorten(meta.name || "(untitled)"), lastAt: at.toISOString() });
   }
@@ -197,7 +222,7 @@ export function cursorSessions(cursorChats: string, folder: string): Session[] {
 /** Chat count and newest store mtime for `folder`. For ordering only: stores aren't opened. */
 export function cursorFolderStats(cursorChats: string, folder: string): FolderStats {
   const dirs = cursorChatDirs(cursorChats, folder);
-  return { count: dirs.length, lastUsed: newestMtime(dirs.flatMap((d) => [path.join(d, "store.db"), path.join(d, "store.db-wal")])) };
+  return { count: dirs.length, lastUsed: newestMtime(dirs.flatMap(cursorStoreFiles)) };
 }
 
 // --- Listings -------------------------------------------------------------------------------------
