@@ -14,6 +14,7 @@ import { openProject, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
+import { detect, formatDetection } from "./src/setup";
 import { spawnJobAgent } from "./src/spawn";
 import { buildStatus, formatStatus } from "./src/status";
 
@@ -49,6 +50,7 @@ const USAGE = `usage: bun orch.ts <command>
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
   project remove <name>          unregister a project (refused while an unfinished job includes it)
+  setup [--json]                 prerequisites, installed agents and registry state, for /setup
   agent add <claude|cursor> | agent default <name> | agent remove <name>
                                  register an agent, make it the default, or remove it
   skills [project] [--resolve <skill>] [--json]
@@ -182,6 +184,13 @@ const commands: Record<string, Command> = {
       context: (values.context ?? "").split(",").map((c) => c.trim()).filter(Boolean),
     });
     deps.out(JSON.stringify(p, null, 2));
+    return 0;
+  },
+
+  async setup(args, deps) {
+    const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
+    const d = detect(path.join(deps.root, "registry"), deps.which, deps.env);
+    deps.out(values.json ? JSON.stringify(d, null, 2) : formatDetection(d));
     return 0;
   },
 
