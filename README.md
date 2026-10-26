@@ -6,50 +6,60 @@ The control room for a Herdr session. From this one directory you can:
 - see the **status** of every agent across Herdr workspaces, by project and job,
 - run cross-project **jobs**: one agent per repo, driven through design → plan → build, with every question, decision and result reported back here.
 
-The full design is in [`docs/superpowers/specs/2026-10-23-orchestrator-design.md`](docs/superpowers/specs/2026-10-23-orchestrator-design.md).
+## Prerequisites
 
-## Requirements
+- [Bun](https://bun.sh): runs `orch.ts` (no other dependencies to install).
+- [Herdr](https://herdr.dev): the terminal workspace the agents live in. Run the orchestrator from inside a Herdr pane (`HERDR_ENV=1`).
+- git: job agents work in their own worktrees.
+- At least one agent CLI: [Claude Code](https://claude.com/claude-code) (`claude`) and/or [Cursor CLI](https://cursor.com/cli) (`cursor-agent`).
 
-- [Bun](https://bun.sh) (no other dependencies)
-- Herdr, with this orchestrator running inside a Herdr pane (`HERDR_ENV=1`)
-- The agent CLIs you want to drive: `claude` and/or `cursor-agent`
-- `git`, for job worktrees
+## Getting started
 
-## Quick start
+1. Clone this repo.
+2. Inside Herdr, open Claude Code in the repo folder.
+3. Run `/setup`. It checks the prerequisites, lets you pick your agents and a default, then helps you register your repos.
+4. Run `/intro` for a short tour.
 
-Run Claude Code in this directory, inside Herdr, and use the slash commands:
+Your registry (`registry/agents.json`, `registry/projects.json`), `docs/` and `jobs/` are local to you and ignored by git. `registry/*-example.json` show the file format.
+
+Then, for example:
 
 ```
-/register ~/repos/my-service     # add a repo to the registry
-/open my-service                 # Claude in a new tab of the project's workspace
-/open my-service cursor          # or Cursor
+/open my-service                 # your default agent in a new tab of the project's workspace
+/open my-service cursor          # or a specific agent
 /open my-service --topic "login bug"   # tab labelled with a topic
 /status                          # every agent, by project and job
 /job add a status field to the orders API and show it in the UI
-```
-
-Or call the CLI directly:
-
-```bash
-bun orch.ts open <project> [agent] [--topic T]
-bun orch.ts status [--json]
 ```
 
 ## Slash commands
 
 | Command | What it does |
 | --- | --- |
-| `/open <project> [agent] [--topic T]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to `claude`. The agent is named after its kind (`claude`, then `claude-2`, ... since Herdr names are session-wide); the tab is labelled `T` if given, else Herdr numbers it as usual. |
+| `/setup` | First-time setup: checks prerequisites, picks your agents and default, registers your repos. Safe to run again. |
+| `/intro` | A short explanation of this tool. |
+| `/open <project> [agent] [--topic T]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to your default agent. The agent is named after its kind (`claude`, then `claude-2`, ... since Herdr names are session-wide); the tab is labelled `T` if given, else Herdr numbers it as usual. |
+| `/bash <project> [--topic T]` | Same tab placement, a plain terminal with no agent. |
+| `/code <project \| path \| .>` | Opens a project's repo, or any directory, in VS Code. |
 | `/status` | Shows every Herdr agent mapped to its project and job, plus what each open job is waiting on. |
+| `/cleanup [workspace...]` | Lists dormant agents and closes only the ones you approve. |
 | `/register <path> [name]` | Reads the repo, proposes a name, description and context files, and saves them after you approve. |
+| `/unregister <project>` | Removes a project from the registry (refused while an unfinished job includes it). The repo itself is untouched. |
+| `/agent add\|default\|remove <name>` | Adds Claude or Cursor, switches the default agent, or removes one. |
 | `/job <request>` | Starts a cross-project job. Also `/job list`, `/job show <id>`, `/job resume <id>`. |
 
 ## CLI
 
 ```
 bun orch.ts open <project> [agent] [--topic T]
+bun orch.ts bash <project> [--topic T]
+bun orch.ts code <project | path | .>
 bun orch.ts status [--json]
+bun orch.ts cleanup [workspace...] [--idle 1h] [--json] | cleanup --close <pick...>
+bun orch.ts setup [--json]
+bun orch.ts agent add <claude|cursor> | agent default <name> | agent remove <name>
 bun orch.ts project add <path> --description D [--name N] [--context a,b,c]
+bun orch.ts project remove <name>
 bun orch.ts skills [project] [--resolve <skill>] [--json]
 bun orch.ts job new <slug> --title T --request R --projects a,b
 bun orch.ts job list
@@ -83,7 +93,7 @@ By default each job agent works in its own linked worktree at `<repo>.worktrees/
 - `registry/projects.json`: each project's `name`, `path`, `description` and `context` (the repo's agent-instruction files, relative to the repo root).
 - `registry/agents.json`: each agent's Herdr `kind`, `openArgs` for interactive use, `jobArgs` for job agents, and optional `worktreeArgs` added only inside job-created worktrees. `defaultAgent` picks the agent used when none is named.
 
-To add a project, use `/register` or `bun orch.ts project add`. To add an agent, add an entry to `agents.json` and a skill under `.agents/skills/` that teaches the orchestrator how to drive it.
+Both files are local (git-ignored); `/setup`, `/register`, `/unregister` and `/agent` write them. `registry/agents-example.json` and `registry/projects-example.json` show the format. Only Claude and Cursor are offered for now: a new agent kind also needs a skill under `.agents/skills/` that teaches the orchestrator how to drive it.
 
 ## Skills
 
