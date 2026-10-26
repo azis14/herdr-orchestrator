@@ -1,4 +1,4 @@
-# orchestrator
+# Herdr Orchestrator
 
 The control room for a Herdr session. From this one directory you can:
 
