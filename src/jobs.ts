@@ -111,6 +111,11 @@ export function listJobs(root: string): Job[] {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
 }
 
+/** Jobs not yet at `done`. */
+export function openJobs(root: string): Job[] {
+  return listJobs(root).filter((j) => j.stage !== "done");
+}
+
 export function setStage(root: string, id: string, stage: Stage): Job {
   if (!STAGES.includes(stage)) throw new OrchError(`unknown stage "${stage}". Stages: ${STAGES.join(", ")}`);
   const job = loadJob(root, id);

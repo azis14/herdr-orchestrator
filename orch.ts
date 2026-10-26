@@ -9,6 +9,7 @@ import { OrchError } from "./src/errors";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
+import { addAgent, removeAgent, setDefaultAgent } from "./src/manage";
 import { openProject, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
@@ -47,6 +48,8 @@ const USAGE = `usage: bun orch.ts <command>
                                  list dormant agents (idle D, default 1h) with a pick for each; close approved picks
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
+  agent add <claude|cursor> | agent default <name> | agent remove <name>
+                                 register an agent, make it the default, or remove it
   skills [project] [--resolve <skill>] [--json]
                                  list orchestrator or repo skills; resolve which copy an agent uses
   job new <slug> --title T --request R --projects a,b
@@ -172,6 +175,22 @@ const commands: Record<string, Command> = {
       context: (values.context ?? "").split(",").map((c) => c.trim()).filter(Boolean),
     });
     deps.out(JSON.stringify(p, null, 2));
+    return 0;
+  },
+
+  async agent(args, deps) {
+    const usage = "usage: agent add <claude|cursor> | agent default <name> | agent remove <name>";
+    const [sub, name, ...extra] = args;
+    if (!name || extra.length) throw new OrchError(usage);
+    const dir = path.join(deps.root, "registry");
+    if (sub === "add") deps.out(JSON.stringify(addAgent(dir, name)));
+    else if (sub === "default") {
+      setDefaultAgent(dir, name);
+      deps.out(`default agent: ${name}`);
+    } else if (sub === "remove") {
+      removeAgent(dir, deps.root, name);
+      deps.out(`removed agent ${name}`);
+    } else throw new OrchError(usage);
     return 0;
   },
 

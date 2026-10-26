@@ -34,7 +34,7 @@ export interface Registry {
   defaultAgent: string;
 }
 
-function readJson(file: string): any {
+export function readJson(file: string): any {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch (e) {

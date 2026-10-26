@@ -1,0 +1,7 @@
+{
+  "defaultAgent": "claude",
+  "agents": [
+    { "name": "claude", "kind": "claude", "openArgs": [], "jobArgs": [], "resumeArgs": ["--resume", "{session}"] },
+    { "name": "cursor", "kind": "cursor", "openArgs": [], "jobArgs": ["--force"], "worktreeArgs": ["--trust"], "resumeArgs": ["--resume", "{session}"] }
+  ]
+}
