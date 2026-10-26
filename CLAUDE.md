@@ -47,7 +47,7 @@ Slash commands: `/setup`, `/intro`, `/open`, `/bash`, `/code`, `/status`, `/clea
 
 ## Rules that aren't obvious from the code
 
-- **Choices are pickers.** When a slash command or skill needs the user to choose from a known set of options, ask with `AskUserQuestion`, never by asking them to type. Free-text answers (paths, change requests, descriptions) stay free text. Never pick on the user's behalf.
+- **Choices are pickers.** When a slash command or skill needs the user to choose from a known set of options, ask with `AskUserQuestion`, never by asking them to type. Free-text answers (paths, change requests, descriptions) stay free text. Never pick on the user's behalf. A question needs 2–4 options (add "Cancel" or "None" when only one is left) and unique labels, because the answer comes back as the label.
 - **Repo rules win.** A repo's `CLAUDE.md` / `AGENTS.md` / rules / skills override the orchestrator's fallback mechanics (worktree flow, base branch, branch names, env setup, where docs go).
 - Never push, open MRs, or answer an agent's permission dialog without the user. Never close Herdr workspaces/tabs/panes without the user's confirmation, and never ones this orchestrator didn't create except through `/cleanup`.
 - Cursor's workspace-trust dialog shows up in Herdr as `idle`. Read the pane before prompting an interactive Cursor agent, or any text you send may answer the dialog. Cursor job agents launch with `--force`, plus `--trust` (the agent's `worktreeArgs`) only inside a job-created worktree, never the user's own checkout.

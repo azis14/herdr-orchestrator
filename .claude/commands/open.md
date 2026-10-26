@@ -8,6 +8,9 @@ Open an agent for the user, from `$ARGUMENTS`: an optional project, an optional 
 
 Every choice below is asked with AskUserQuestion, never as a question the user types an answer to. Paging: when a list doesn't fit, show the first options plus "Older…" (or "More…"), which shows the next page; the last page has no such option. AskUserQuestion always adds "Other" for free text.
 
+- **2 to 4 options per question.** When a page would have only one option, add "Cancel". On "Cancel", stop without opening anything.
+- **Labels are unique within a question,** because the answer is the label. Shorten as each step says. If two labels on a page still match, add ` (2)`, ` (3)`, … in page order, and map the answer back by its exact label.
+
 ## 1. Project
 
 If no project was given, or it isn't registered, run `bun orch.ts project list --json` and ask which project. Options are project names (description: the project's description), 3 per page plus "More…". Match "Other" text against project names: one match → use it; several → ask again with those; none → say so and ask again.
@@ -16,13 +19,13 @@ If no project was given, or it isn't registered, run `bun orch.ts project list -
 
 Run `bun orch.ts folders <project> [agent] --json`, adding `--with-sessions` for `--continue` and `--resume`. If it returns only the base folder, skip the question and use it.
 
-Otherwise ask which folder to open in. Each page: "Base folder" first (description: its branch), then 2 worktrees, then "Older…". A worktree's label is its folder's base name (shortened to 30 characters); its description is the branch, then `last session 3d ago` or `no sessions`, then `job <id>, agent live` (or `job <id>`) when the entry has `job`. Match "Other" text against worktree folder names and branches, as for projects.
+Otherwise ask which folder to open in. Each page: "Base folder" first (description: its branch), then 2 worktrees, then "Older…". A worktree's label is its folder's base name; if that's over 30 characters, keep its last 29 after a leading `…` (worktree names often share a long prefix); its description is the branch, then `last session 3d ago` or `no sessions`, then `job <id>, agent live` (or `job <id>`) when the entry has `job`. Match "Other" text against worktree folder names and branches, as for projects.
 
 ## 3. Open
 
 - **Plain:** `bun orch.ts open <project> [agent] --folder <F> [--topic T]`.
 - **`--continue`:** run `bun orch.ts sessions <project> [agent] --folder <F> --json` and take the first (newest) session. If there are none, say "no sessions to continue in <F>" and stop without opening anything. If it has `openIn`, ask "That session is already open in <workspace> tab <tab>." with "Open anyway" / "Pick another" / "Cancel"; "Pick another" goes to the `--resume` picker below. Then `bun orch.ts open <project> [agent] --folder <F> --resume <id> [--topic T]`.
-- **`--resume`:** run the same `sessions` listing (none → say so and stop) and ask which session, 3 per page plus "Older…". Label: the title, shortened to 40 characters. Description: `2h ago · <branch> · <lastLine>`, leaving out unknown parts, plus `already open in <workspace> tab <tab>` when it has `openIn`. Match "Other" text against titles and ids. If the chosen one is open, ask "Open anyway" / "Cancel". Then `bun orch.ts open <project> [agent] --folder <F> --resume <id> [--topic T]`.
+- **`--resume`:** run the same `sessions` listing (none → say so and stop) and ask which session, 3 per page plus "Older…". Label: the title shortened to 32 characters, then ` · ` and the first 4 characters of the session id (titles repeat, e.g. two `/mr-review` sessions). Description: `2h ago · <branch> · <lastLine>`, leaving out unknown parts, plus `already open in <workspace> tab <tab>` when it has `openIn`. Match "Other" text against titles and ids. If the chosen one is open, ask "Open anyway" / "Cancel". Then `bun orch.ts open <project> [agent] --folder <F> --resume <id> [--topic T]`.
 
 Report the output line. If it fails because the project, agent, folder or session is unknown, show the names from the error.
 

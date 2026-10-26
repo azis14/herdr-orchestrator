@@ -4,7 +4,7 @@ argument-hint: [project | path | .]
 allowed-tools: Bash(bun orch.ts code:*), Bash(bun orch.ts project list:*), AskUserQuestion
 ---
 
-If no target was given, ask which project with AskUserQuestion, from `bun orch.ts project list --json`: project names (description: the project's description), 3 per page plus "More…". Then run `bun orch.ts code <project>`.
+If no target was given, ask which project with AskUserQuestion, from `bun orch.ts project list --json`: project names (description: the project's description), 3 per page plus "More…". A page with only one project also gets "Cancel", since a question needs at least 2 options. Then run `bun orch.ts code <project>`.
 
 Otherwise run `bun orch.ts code $ARGUMENTS` and report its output line.
 

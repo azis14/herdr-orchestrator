@@ -10,8 +10,8 @@ Flag any candidate whose last message ends with a question mark (it may be waiti
 
 Ask which to close with AskUserQuestion, never as a typed answer:
 
-- **Up to 4 candidates:** one multi-select question, one option per agent. Label: the agent name. Description: workspace, idle time and last message, with the `?` and `unknown` warnings. Nothing ticked means close none.
-- **More than 4:** ask "Close all" / "Choose…" / "None". For "Choose…", show the candidates as multi-select questions of 4 options each, up to 4 questions per call, and more calls until every candidate was shown.
+- **Up to 4 candidates:** one multi-select question, one option per agent. Label: the agent name. Description: workspace, idle time and last message, with the `?` and `unknown` warnings. Nothing ticked means close none. With a single candidate, add a second option "None (keep it)", since a question needs at least 2 options.
+- **More than 4:** ask "Close all" / "Choose…" / "None". For "Choose…", show the candidates as multi-select questions of 4 options each, up to 4 questions per call, and more calls until every candidate was shown. A question left with one candidate also gets "None of these".
 
 Never run `--close` without their picks.
 
