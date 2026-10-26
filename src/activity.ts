@@ -7,14 +7,14 @@ export interface Activity {
   lastMessage?: string;
 }
 
-interface Entry {
+export interface Entry {
   type?: string;
   subtype?: string;
   timestamp?: string;
   message?: { content?: unknown };
 }
 
-function readEntries(file: string): Entry[] {
+export function readEntries(file: string): Entry[] {
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
@@ -39,7 +39,7 @@ function isCounted(e: Entry): boolean {
   return e.type === "user" || e.type === "assistant" || (e.type === "system" && e.subtype === "turn_duration");
 }
 
-function newest(entries: Entry[]): number | null {
+export function newest(entries: Entry[]): number | null {
   let max: number | null = null;
   for (const e of entries) {
     if (!isCounted(e) || typeof e.timestamp !== "string") continue;
@@ -56,7 +56,7 @@ function lastLine(text: string): string | undefined {
     .findLast((l) => l);
 }
 
-function lastMessage(entries: Entry[]): string | undefined {
+export function lastMessage(entries: Entry[]): string | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
     if (e.type !== "assistant" || !Array.isArray(e.message?.content)) continue;

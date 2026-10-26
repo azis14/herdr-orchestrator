@@ -67,7 +67,8 @@ export async function spawnJobAgent(
     );
   }
 
-  const live = (await deps.herdr.listAgents()).find((x) => x.name === agentName);
+  const liveAgents = await deps.herdr.listAgents();
+  const live = liveAgents.find((x) => x.name === agentName);
   if (live) {
     // e.g. the user answered a startup dialog after a failed start: the agent is ours, adopt it.
     if (existing?.status === "start-failed" && live.pane_id === existing.paneId) {
@@ -143,6 +144,14 @@ export async function spawnJobAgent(
       existing.sessionId && a.resumeArgs && a.name === existing.agent
         ? a.resumeArgs.map((x) => x.replaceAll("{session}", existing.sessionId!))
         : [];
+    // Someone resumed this session by hand (`orch open --resume`): two agents on one session would clash.
+    const holder = resume.length && liveAgents.find((x) => x.agent_session?.value === existing.sessionId);
+    if (holder) {
+      throw new OrchError(
+        `session ${existing.sessionId} is already open in pane ${holder.pane_id} (agent ${holder.name ?? "?"}); ` +
+          `close that agent, then run job spawn again`,
+      );
+    }
     const note = resume.length ? { resumedSession: existing.sessionId! } : { resumedFresh: true as const };
     return { ...(await reopen(existing.lastCwd, resume)), ...note };
   }

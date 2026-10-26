@@ -13,14 +13,19 @@ bun test                              # all tests
 bun test tests/open.test.ts           # one file
 bun test -t "name collision"          # tests matching a name
 
-bun orch.ts open <project> [agent] [--topic T]   # new tab in the project's workspace (created if missing); agent defaults to the default agent; tab labelled T
-bun orch.ts bash <project> [--topic T]           # same tab placement, plain terminal, no agent
+bun orch.ts open <project> [agent] [--topic T] [--folder F] [--continue | --resume ID]
+                                                 # new tab in the project's workspace (created if missing); agent defaults to the default agent; tab labelled T;
+                                                 # runs in F (the base folder or a git worktree of it); resumes the newest session there, or session ID
+bun orch.ts bash <project> [--topic T] [--folder F]   # same tab placement, plain terminal, no agent
+bun orch.ts folders <project> [agent] [--with-sessions] [--json]   # base folder + git worktrees, with the agent's session count and last use
+bun orch.ts sessions <project> [agent] [--folder F] [--json]       # the agent's sessions started in F, newest first, marked if open in Herdr
 bun orch.ts code <project | path | .>            # open a project's repo, or any dir, in VS Code (no Herdr)
 bun orch.ts status [--json]           # every Herdr agent, mapped to project and job
 bun orch.ts cleanup [workspace...] [--idle 1h] [--json]   # list dormant agents (idle, no child processes) with a pick each; nothing is closed
 bun orch.ts cleanup --close <pick...>            # close the picks the user approved
 bun orch.ts setup [--json]            # prerequisites, installed agents, registry state (what /setup reads)
 bun orch.ts agent add <claude|cursor> | agent default <name> | agent remove <name>
+bun orch.ts project list [--json]     # registered projects, most recently used first
 bun orch.ts project add <path> --description D [--name N] [--context a,b]
 bun orch.ts project remove <name>     # refused while an unfinished job includes it
 bun orch.ts skills [project] [--resolve <skill>]
@@ -32,7 +37,7 @@ Slash commands: `/setup`, `/intro`, `/open`, `/bash`, `/code`, `/status`, `/clea
 ## Architecture
 
 - **The script does the mechanics; skills do the judgment.** `orch.ts` (Bun, no dependencies) and `src/` handle the registry, Herdr calls, skill scanning, job records and spawning, all deterministically. The `orchestrate-job` skill (plus `claude-code` / `cursor-cli` for driving each agent) handles question routing, cross-repo contract checks and approval stops.
-- **All Herdr, git and editor calls go through injectable runners.** That's `Runner` in `src/herdr.ts`, `GitRunner` in `src/git.ts` and `EditorRunner` in `src/editor.ts`, passed in via `Deps` to `main(argv, deps)` in `orch.ts`. Tests use `tests/fakes.ts` (`fakeRunner`, `testRegistry`, `testDeps`) and never touch the real Herdr session.
+- **All Herdr, git and editor calls go through injectable runners.** That's `Runner` in `src/herdr.ts`, `GitRunner` in `src/git.ts` and `EditorRunner` in `src/editor.ts`, passed in via `Deps` to `main(argv, deps)` in `orch.ts`. Session stores are read from `Deps.claudeProjects` (`~/.claude/projects`) and `Deps.cursorChats` (`~/.cursor/chats`), read-only. Tests use `tests/fakes.ts` (`fakeRunner`, `testRegistry`, `testDeps`) and never touch the real Herdr session.
 - **Registry:** `registry/projects.json` and `registry/agents.json`, local to each user (git-ignored); `registry/*-example.json` are the tracked templates. `orch.ts` loads the registry lazily, so `setup` and `agent` work before it exists and other commands say "run /setup first". Projects come from `/register <path>` (or `orch project add`); entries have `name`, `path`, `description`, `context` files relative to the repo. Agents come from the presets in `src/manage.ts` (`/agent add`, `/setup`): Herdr `--kind`, `openArgs` (interactive), `jobArgs` (broad permissions for job agents), optional `worktreeArgs` (added only inside job-created worktrees) and `resumeArgs` (e.g. `["--resume", "{session}"]`). A new agent kind needs a preset plus a skill for driving it.
 - **Workspaces:** a project's workspace is the Herdr workspace whose label equals the project name. Job agents with the default mode get a linked worktree workspace labelled `<project>:<job-id>`, at `<repo>.worktrees/<job-id>` on branch `feature/<job-id>` off a fetched `origin/dev`.
 - **Agent names** must match Herdr's `^[a-z][a-z0-9_-]{0,31}$`; `toAgentName` in `src/open.ts` sanitizes them (e.g. `shop2.0` → `shop2-0`). They're unique across the whole Herdr session, so `open` names agents after their kind and numbers repeats: `claude`, `claude-2`, ...; the tab takes `--topic`, else Herdr's default label. Job agents use `jobAgentName` in `src/spawn.ts`, which is `<project>-<slug>` plus a hash of the job id, so long slugs never collide.
@@ -42,6 +47,7 @@ Slash commands: `/setup`, `/intro`, `/open`, `/bash`, `/code`, `/status`, `/clea
 
 ## Rules that aren't obvious from the code
 
+- **Choices are pickers.** When a slash command or skill needs the user to choose from a known set of options, ask with `AskUserQuestion`, never by asking them to type. Free-text answers (paths, change requests, descriptions) stay free text. Never pick on the user's behalf. A question needs 2–4 options (add "Cancel" or "None" when only one is left) and unique labels, because the answer comes back as the label.
 - **Repo rules win.** A repo's `CLAUDE.md` / `AGENTS.md` / rules / skills override the orchestrator's fallback mechanics (worktree flow, base branch, branch names, env setup, where docs go).
 - Never push, open MRs, or answer an agent's permission dialog without the user. Never close Herdr workspaces/tabs/panes without the user's confirmation, and never ones this orchestrator didn't create except through `/cleanup`.
 - Cursor's workspace-trust dialog shows up in Herdr as `idle`. Read the pane before prompting an interactive Cursor agent, or any text you send may answer the dialog. Cursor job agents launch with `--force`, plus `--trust` (the agent's `worktreeArgs`) only inside a job-created worktree, never the user's own checkout.

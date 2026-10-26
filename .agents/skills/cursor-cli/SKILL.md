@@ -25,7 +25,7 @@ In a directory Cursor hasn't trusted, it shows a box: **"⚠ Workspace Trust Req
 herdr agent read <name> --source visible --lines 40
 ```
 
-If the screen shows "Workspace Trust Required", don't prompt. Tell the user which pane and directory, and let them answer it, or send `a` only if they explicitly tell you to. Job agents in job-created worktrees start with `--trust` and never show it; `--repo-worktree` job agents can.
+If the screen shows "Workspace Trust Required", don't prompt. Ask the user with AskUserQuestion ("Trust this folder" / "Quit", naming the pane and directory) and send only what they pick: `herdr pane send-keys <pane> a` or `q`. `/open` does this for its own agents. Job agents in job-created worktrees start with `--trust` and never show it; `--repo-worktree` job agents can.
 
 ## Hand it a task
 

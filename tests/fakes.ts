@@ -72,6 +72,7 @@ export function testDeps(handlers: Record<string, FakeHandler> = {}, overrides: 
     git: async () => ({ code: 0, stdout: "", stderr: "" }),
     editor: async () => ({ code: 0, stderr: "" }),
     claudeProjects: fs.mkdtempSync(path.join(os.tmpdir(), "orch-claude-")),
+    cursorChats: fs.mkdtempSync(path.join(os.tmpdir(), "orch-cursor-")),
     children: async () => [],
     which: (bin) => `/usr/bin/${bin}`,
     env: { HERDR_ENV: "1" },

@@ -3,16 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { closeAgents, findDormant, formatDormant, parseDuration } from "./src/cleanup";
+import { closeAgents, findDormant, formatAge, formatDormant, parseDuration } from "./src/cleanup";
 import { vscodeRunner, type EditorRunner } from "./src/editor";
 import { OrchError } from "./src/errors";
+import { resolveFolder } from "./src/folders";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
-import { openProject, openTerminal } from "./src/open";
+import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
-import { addProject, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
+import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
+import { listFolderEntries, listProjects, listSessions } from "./src/sessions";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
 import { detect, formatDetection } from "./src/setup";
 import { spawnJobAgent } from "./src/spawn";
@@ -29,6 +31,8 @@ export interface Deps {
   editor: EditorRunner;
   /** Claude's transcript root (`~/.claude/projects`). */
   claudeProjects: string;
+  /** Cursor's chat root (`~/.cursor/chats`). */
+  cursorChats: string;
   children: ChildrenRunner;
   /** Where a binary is on PATH, or null. */
   which: (bin: string) => string | null;
@@ -40,13 +44,20 @@ export interface Deps {
 
 const USAGE = `usage: bun orch.ts <command>
 
-  open <project> [agent] [--topic T]
-                                 open an agent in a new tab of the project's workspace (tab labelled T)
-  bash <project> [--topic T]     open a plain terminal, no agent, in a new tab of the project's workspace
+  open <project> [agent] [--topic T] [--folder F] [--continue | --resume ID]
+                                 open an agent in a new tab of the project's workspace (tab labelled T), in folder F
+                                 (a worktree; default the base folder), resuming the newest session there or session ID
+  bash <project> [--topic T] [--folder F]
+                                 open a plain terminal, no agent, in a new tab of the project's workspace
   code <project | path | .>      open a project's repo, or any directory, in VS Code
   status [--json]                every agent across workspaces, by project and job
   cleanup [workspace...] [--idle D] [--json] | cleanup --close <pick...>
                                  list dormant agents (idle D, default 1h) with a pick for each; close approved picks
+  folders <project> [agent] [--with-sessions] [--json]
+                                 the project's base folder and git worktrees, with the agent's sessions in each
+  sessions <project> [agent] [--folder F] [--json]
+                                 the agent's sessions started in a folder (default: the base folder), newest first
+  project list [--json]          registered projects, most recently used first
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
   project remove <name>          unregister a project (refused while an unfinished job includes it)
@@ -66,39 +77,58 @@ type Command = (args: string[], deps: Deps) => Promise<number>;
 
 const commands: Record<string, Command> = {
   async open(args, deps) {
-    const usage = "usage: open <project> [agent] [--topic T]";
+    const usage = "usage: open <project> [agent] [--topic T] [--folder F] [--continue | --resume ID]";
     const { positionals, values } = parseArgs({
       args,
       allowPositionals: true,
-      options: { topic: { type: "string" } },
+      options: {
+        topic: { type: "string" },
+        folder: { type: "string" },
+        continue: { type: "boolean" },
+        resume: { type: "string" },
+      },
     });
     const [project, agent] = positionals;
     if (!project || positionals.length > 2) throw new OrchError(usage);
     const topic = values.topic?.trim();
     if (values.topic !== undefined && !topic) throw new OrchError("open: --topic is empty");
-    const r = await openProject(deps.herdr, deps.reg, project, agent, { topic });
+    if (values.continue && values.resume !== undefined) {
+      throw new OrchError("open: --continue and --resume can't be used together");
+    }
+    const r = await openAgent(deps, project, agent, {
+      topic,
+      folder: values.folder,
+      continue: values.continue,
+      resume: values.resume,
+    });
+    const s = r.session;
     deps.out(
       `opened ${r.agentName} (${r.agent}) in ${r.project}: workspace ${r.workspaceId} tab ${r.tabId} pane ${r.paneId}` +
-        (r.createdWorkspace ? " [new workspace]" : ""),
+        (r.createdWorkspace ? " [new workspace]" : "") +
+        (r.folder.base ? "" : ` — folder ${r.folder.path}`) +
+        (s ? ` — resumed "${s.title}" (${s.id})` : "") +
+        (s?.openIn ? ` (also open in ${s.openIn.workspace} tab ${s.openIn.tabId})` : ""),
     );
     return 0;
   },
 
   async bash(args, deps) {
-    const usage = "usage: bash <project> [--topic T]";
+    const usage = "usage: bash <project> [--topic T] [--folder F]";
     const { positionals, values } = parseArgs({
       args,
       allowPositionals: true,
-      options: { topic: { type: "string" } },
+      options: { topic: { type: "string" }, folder: { type: "string" } },
     });
     const [project] = positionals;
     if (!project || positionals.length > 1) throw new OrchError(usage);
     const topic = values.topic?.trim();
     if (values.topic !== undefined && !topic) throw new OrchError("bash: --topic is empty");
-    const r = await openTerminal(deps.herdr, deps.reg, project, { topic });
+    const folder = await resolveFolder(deps.git, getProject(deps.reg, project), values.folder);
+    const r = await openTerminal(deps.herdr, deps.reg, project, { topic, cwd: folder.path });
     deps.out(
       `opened terminal in ${r.project}: workspace ${r.workspaceId} tab ${r.tabId} pane ${r.paneId}` +
-        (r.createdWorkspace ? " [new workspace]" : ""),
+        (r.createdWorkspace ? " [new workspace]" : "") +
+        (folder.base ? "" : ` — folder ${folder.path}`),
     );
     return 0;
   },
@@ -159,7 +189,15 @@ const commands: Record<string, Command> = {
 
   async project(args, deps) {
     const [sub, ...rest] = args;
-    const usage = "usage: project add <path> --description D [--name N] [--context a,b,c] | project remove <name>";
+    const usage =
+      "usage: project list [--json] | project add <path> --description D [--name N] [--context a,b,c] | project remove <name>";
+    if (sub === "list") {
+      const { values } = parseArgs({ args: rest, options: { json: { type: "boolean" } } });
+      const rows = listProjects(deps);
+      const ago = (iso: string | null) => (iso ? `${formatAge(deps.now().getTime() - Date.parse(iso))} ago` : "never");
+      deps.out(values.json ? JSON.stringify(rows, null, 2) : rows.map((r) => `${r.name}  ${ago(r.lastUsed)}  ${r.description}`).join("\n"));
+      return 0;
+    }
     if (sub === "remove") {
       if (rest.length !== 1) throw new OrchError(usage);
       const p = removeProject(path.join(deps.root, "registry"), deps.root, rest[0]);
@@ -184,6 +222,54 @@ const commands: Record<string, Command> = {
       context: (values.context ?? "").split(",").map((c) => c.trim()).filter(Boolean),
     });
     deps.out(JSON.stringify(p, null, 2));
+    return 0;
+  },
+
+  async folders(args, deps) {
+    const usage = "usage: folders <project> [agent] [--with-sessions] [--json]";
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { "with-sessions": { type: "boolean" }, json: { type: "boolean" } },
+    });
+    const [project, agent] = positionals;
+    if (!project || positionals.length > 2) throw new OrchError(usage);
+    const p = getProject(deps.reg, project);
+    const rows = await listFolderEntries(deps, p, getAgent(deps.reg, agent, p), { withSessions: !!values["with-sessions"] });
+    if (values.json) {
+      deps.out(JSON.stringify(rows, null, 2));
+      return 0;
+    }
+    const ago = (iso: string | null) => (iso ? `last ${formatAge(deps.now().getTime() - Date.parse(iso))} ago` : "never used");
+    for (const f of rows) {
+      const job = f.job ? `  job ${f.job.id}${f.job.live ? ", agent live" : ""}` : "";
+      deps.out(`${f.base ? "base" : "worktree"}  ${f.path}  ${f.branch ?? "?"}  ${f.sessions} session${f.sessions === 1 ? "" : "s"}, ${ago(f.lastUsed)}${job}`);
+    }
+    return 0;
+  },
+
+  async sessions(args, deps) {
+    const usage = "usage: sessions <project> [agent] [--folder F] [--json]";
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { folder: { type: "string" }, json: { type: "boolean" } },
+    });
+    const [project, agent] = positionals;
+    if (!project || positionals.length > 2) throw new OrchError(usage);
+    const p = getProject(deps.reg, project);
+    const folder = await resolveFolder(deps.git, p, values.folder);
+    const rows = await listSessions(deps, p, getAgent(deps.reg, agent, p), folder.path);
+    if (values.json) {
+      deps.out(JSON.stringify(rows, null, 2));
+      return 0;
+    }
+    if (!rows.length) deps.out(`no sessions in ${folder.path}`);
+    for (const s of rows) {
+      const open = s.openIn ? `  [open in ${s.openIn.workspace} tab ${s.openIn.tabId}]` : "";
+      const when = formatAge(deps.now().getTime() - Date.parse(s.lastAt));
+      deps.out(`${s.id}  ${when} ago  ${s.branch ?? "-"}  ${s.title}${open}`);
+    }
     return 0;
   },
 
@@ -349,6 +435,7 @@ if (import.meta.main) {
       git: gitRunner,
       editor: vscodeRunner,
       claudeProjects: path.join(os.homedir(), ".claude", "projects"),
+      cursorChats: path.join(os.homedir(), ".cursor", "chats"),
       children: procChildren,
       which: (bin) => Bun.which(bin),
       env: process.env,

@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { OrchError } from "../src/errors";
 import { Herdr } from "../src/herdr";
-import { nextAgentName, openProject, openTerminal, toAgentName } from "../src/open";
-import { fakeRunner, ok, testRegistry, ws, type FakeHandler } from "./fakes";
+import { nextAgentName, openAgent, openProject, openTerminal, toAgentName } from "../src/open";
+import { claudeDirName } from "../src/sessions";
+import { fakeRunner, ok, testDeps, testRegistry, ws, type FakeHandler } from "./fakes";
 
 function runner(workspaces: unknown[], extra: Record<string, FakeHandler> = {}, agents: unknown[] = []) {
   return fakeRunner({
@@ -138,6 +142,7 @@ describe("openProject", () => {
     expect(e.message).toContain("w5:t9");
     expect(e.message).toContain("w5:p9");
     expect(e.message).toContain("agent_not_ready");
+    expect(e.message).toContain("pane w5:p9 (agent claude)");
   });
 
   test("label match is exact", async () => {
@@ -207,5 +212,109 @@ describe("agent names (herdr: ^[a-z][a-z0-9_-]{0,31}$)", () => {
     const r = await openProject(new Herdr(run), reg, "shop2.0");
     expect(r.agentName).toBe("claude");
     expect(r.workspaceId).toBe("w3");
+  });
+});
+
+/** A Claude transcript launched in `folder`. */
+function claudeSession(root: string, folder: string, id: string, ts: string) {
+  const dir = path.join(root, claudeDirName(folder));
+  fs.mkdirSync(dir, { recursive: true });
+  const entry = { type: "user", cwd: folder, timestamp: ts, message: { role: "user", content: `task ${id}` } };
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), JSON.stringify(entry) + "\n");
+}
+
+/** testDeps whose git lists one worktree (a real temp dir) next to shop-api's base folder. */
+function withWorktree(handlers: Record<string, FakeHandler> = {}) {
+  const t = testDeps(handlers);
+  const base = t.deps.reg.projects[0].path;
+  const wt = fs.mkdtempSync(path.join(os.tmpdir(), "orch-wt-"));
+  t.deps.git = async () => ({
+    code: 0,
+    stdout: `worktree ${base}\nHEAD 1111111\nbranch refs/heads/dev\n\nworktree ${wt}\nHEAD 2222222\nbranch refs/heads/feature/x\n`,
+    stderr: "",
+  });
+  return { ...t, base, wt };
+}
+
+describe("openAgent", () => {
+  test("no new flags: same as openProject, and no git call", async () => {
+    const t = testDeps();
+    t.deps.git = async () => {
+      throw new Error("git must not be called");
+    };
+    const r = await openAgent(t.deps, "shop-api", undefined, { topic: "x" });
+    expect(callsOf(t.run, "tab create")[0]).toEqual([
+      "tab", "create", "--workspace", "w5", "--cwd", t.deps.reg.projects[0].path, "--label", "x", "--no-focus",
+    ]);
+    expect(callsOf(t.run, "agent start")[0]).toEqual(["agent", "start", "claude", "--kind", "claude", "--pane", "w5:p9"]);
+    expect(r.folder.base).toBe(true);
+    expect(r.session).toBeUndefined();
+  });
+
+  test("--folder opens the tab there", async () => {
+    const t = withWorktree();
+    const r = await openAgent(t.deps, "shop-api", undefined, { folder: t.wt });
+    expect(callsOf(t.run, "tab create")[0]).toContain(t.wt);
+    expect(r.folder).toEqual({ path: t.wt, branch: "feature/x", base: false });
+  });
+
+  test("--continue resumes the newest session in the folder", async () => {
+    const t = withWorktree();
+    claudeSession(t.deps.claudeProjects, t.wt, "older", "2026-10-01T00:00:00Z");
+    claudeSession(t.deps.claudeProjects, t.wt, "newest", "2026-10-05T00:00:00Z");
+    claudeSession(t.deps.claudeProjects, t.base, "base-one", "2026-10-09T00:00:00Z");
+    const r = await openAgent(t.deps, "shop-api", undefined, { folder: t.wt, continue: true });
+    expect(callsOf(t.run, "agent start")[0]).toEqual([
+      "agent", "start", "claude", "--kind", "claude", "--pane", "w5:p9", "--", "--resume", "newest",
+    ]);
+    expect(r.session?.id).toBe("newest");
+  });
+
+  test("--continue with no sessions opens nothing", async () => {
+    const t = withWorktree();
+    const err = await openAgent(t.deps, "shop-api", undefined, { folder: t.wt, continue: true }).catch((e) => e);
+    expect(err).toBeInstanceOf(OrchError);
+    expect(err.message).toBe(`no claude sessions in ${t.wt}`);
+    expect(callsOf(t.run, "tab create")).toHaveLength(0);
+  });
+
+  test("--resume refuses a session from another folder", async () => {
+    const t = withWorktree();
+    claudeSession(t.deps.claudeProjects, t.base, "base-one", "2026-10-09T00:00:00Z");
+    const err = await openAgent(t.deps, "shop-api", undefined, { folder: t.wt, resume: "base-one" }).catch((e) => e);
+    expect(err).toBeInstanceOf(OrchError);
+    expect(err.message).toContain(`no claude session base-one in ${t.wt}`);
+    expect(callsOf(t.run, "tab create")).toHaveLength(0);
+  });
+
+  test("resuming needs resumeArgs", async () => {
+    const t = testDeps();
+    t.deps.reg.agents[0] = { name: "claude", kind: "claude", openArgs: [], jobArgs: [] };
+    const p = t.deps.reg.projects[0].path;
+    claudeSession(t.deps.claudeProjects, p, "s1", "2026-10-01T00:00:00Z");
+    const err = await openAgent(t.deps, "shop-api", undefined, { resume: "s1" }).catch((e) => e);
+    expect(err).toBeInstanceOf(OrchError);
+    expect(err.message).toContain("can't resume");
+    expect(callsOf(t.run, "tab create")).toHaveLength(0);
+  });
+
+  test("openArgs are kept on resume", async () => {
+    const t = testDeps();
+    t.deps.reg.agents[0].openArgs = ["--model", "x"];
+    const p = t.deps.reg.projects[0].path;
+    claudeSession(t.deps.claudeProjects, p, "s1", "2026-10-01T00:00:00Z");
+    await openAgent(t.deps, "shop-api", undefined, { resume: "s1" });
+    expect(callsOf(t.run, "agent start")[0].slice(-5)).toEqual(["--", "--model", "x", "--resume", "s1"]);
+  });
+
+  test("a session open elsewhere still opens, marked", async () => {
+    const t = testDeps({
+      "agent list": () =>
+        ok({ agents: [{ name: "claude-3", agent: "claude", agent_status: "idle", cwd: "/x", pane_id: "w5:p3", tab_id: "w5:t3", workspace_id: "w5", agent_session: { value: "s1" } }] }),
+    });
+    claudeSession(t.deps.claudeProjects, t.deps.reg.projects[0].path, "s1", "2026-10-01T00:00:00Z");
+    const r = await openAgent(t.deps, "shop-api", undefined, { continue: true });
+    expect(r.session?.openIn).toEqual({ agentName: "claude-3", workspace: "shop-api", tabId: "w5:t3" });
+    expect(callsOf(t.run, "agent start")).toHaveLength(1);
   });
 });
