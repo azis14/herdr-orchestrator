@@ -28,6 +28,9 @@ export interface Deps {
   /** Claude's transcript root (`~/.claude/projects`). */
   claudeProjects: string;
   children: ChildrenRunner;
+  /** Where a binary is on PATH, or null. */
+  which: (bin: string) => string | null;
+  env: Record<string, string | undefined>;
   out: (s: string) => void;
   err: (s: string) => void;
   now: () => Date;
@@ -300,21 +303,20 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
 
 if (import.meta.main) {
   const run = async (): Promise<number> => {
-    let reg: Registry;
-    try {
-      reg = loadRegistry();
-    } catch (e) {
-      console.error(`orch: ${(e as Error).message}`);
-      return 1;
-    }
+    let reg: Registry | undefined;
     return main(Bun.argv.slice(2), {
       herdr: new Herdr(),
-      reg,
+      // Loaded on first use, so setup and agent commands work before a registry exists.
+      get reg() {
+        return (reg ??= loadRegistry());
+      },
       root: ORCH_ROOT,
       git: gitRunner,
       editor: vscodeRunner,
       claudeProjects: path.join(os.homedir(), ".claude", "projects"),
       children: procChildren,
+      which: (bin) => Bun.which(bin),
+      env: process.env,
       out: (s) => console.log(s),
       err: (s) => console.error(s),
       now: () => new Date(),

@@ -73,6 +73,8 @@ export function testDeps(handlers: Record<string, FakeHandler> = {}, overrides: 
     editor: async () => ({ code: 0, stderr: "" }),
     claudeProjects: fs.mkdtempSync(path.join(os.tmpdir(), "orch-claude-")),
     children: async () => [],
+    which: (bin) => `/usr/bin/${bin}`,
+    env: { HERDR_ENV: "1" },
     out: (s) => out.push(s),
     err: (s) => err.push(s),
     now: () => new Date(2026, 9, 23),

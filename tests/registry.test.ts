@@ -54,6 +54,16 @@ describe("registry", () => {
     expect(reg.agents.every((a) => a.openArgs.length === 0)).toBe(true);
   });
 
+  test("missing registry files say to run /setup", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orch-empty-"));
+    expect(() => loadRegistry(dir)).toThrow("no registry yet (missing registry/agents.json): run /setup first");
+    fs.writeFileSync(
+      path.join(dir, "agents.json"),
+      JSON.stringify({ defaultAgent: "claude", agents: [{ name: "claude", kind: "claude", openArgs: [], jobArgs: [] }] }),
+    );
+    expect(() => loadRegistry(dir)).toThrow("missing registry/projects.json");
+  });
+
   test("getProject unknown name lists known names", () => {
     const reg = loadRegistry(tempRegistry([project("shop-api", tempDir()), project("shop-ui", tempDir())]));
     expect(() => getProject(reg, "nope")).toThrow(OrchError);

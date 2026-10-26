@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { main } from "../orch";
+import { OrchError } from "../src/errors";
 import { newJob, upsertAgent } from "../src/jobs";
 import { ok, testDeps, ws } from "./fakes";
 
@@ -339,5 +340,18 @@ describe("cli cleanup", () => {
     fs.rmSync(deps.claudeProjects, { recursive: true });
     expect(await main(["cleanup"], deps)).toBe(0);
     expect(out.join("\n").split("\n")[1].split(/\s+/).slice(0, 4)).toEqual(["idle2h", "shop2.0", "shop-api", "unknown"]);
+  });
+});
+
+describe("cli registry", () => {
+  test("a command that needs the registry reports a missing one", async () => {
+    const t = testDeps();
+    Object.defineProperty(t.deps, "reg", {
+      get: () => {
+        throw new OrchError("no registry yet (missing registry/agents.json): run /setup first");
+      },
+    });
+    expect(await main(["status"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("run /setup first");
   });
 });

@@ -43,6 +43,9 @@ function readJson(file: string): any {
 }
 
 export function loadRegistry(dir = path.join(ORCH_ROOT, "registry")): Registry {
+  for (const f of ["agents.json", "projects.json"]) {
+    if (!fs.existsSync(path.join(dir, f))) throw new OrchError(`no registry yet (missing registry/${f}): run /setup first`);
+  }
   const projects: Project[] = readJson(path.join(dir, "projects.json")).projects ?? [];
   const agentsFile = readJson(path.join(dir, "agents.json"));
   const reg: Registry = { projects, agents: agentsFile.agents ?? [], defaultAgent: agentsFile.defaultAgent };
