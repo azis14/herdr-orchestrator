@@ -121,3 +121,10 @@ bun test -t "name collision"   # tests matching a name
 ```
 
 All Herdr and git calls go through injectable runners (`Runner` in `src/herdr.ts`, `GitRunner` in `src/git.ts`), passed to `main(argv, deps)` in `orch.ts`. Tests use the fakes in `tests/fakes.ts` and never touch a real Herdr session. See [`CLAUDE.md`](CLAUDE.md) for the details agents working on this repo need.
+
+## License
+
+[MIT](LICENSE). Vendored skills keep their upstream licenses:
+
+- `brainstorming`, `executing-plans`, `finishing-a-development-branch`, `subagent-driven-development`, `writing-plans`: [obra/superpowers](https://github.com/obra/superpowers), MIT ([`third_party/superpowers-LICENSE`](third_party/superpowers-LICENSE))
+- `herdr`: [herdrdev/herdr](https://github.com/herdrdev/herdr), Apache-2.0 ([`third_party/herdr-LICENSE`](third_party/herdr-LICENSE))
