@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { OrchError } from "./errors";
 import { openJobs, type Job } from "./jobs";
-import { formatProjectsJson, readJson, type AgentDef, type Project } from "./registry";
+import { addProject, formatProjectsJson, readJson, type AgentDef, type Project, type Registry } from "./registry";
 
 export interface AgentPreset {
   def: AgentDef;
@@ -128,4 +128,32 @@ export function removeProject(dir: string, root: string, name: string): Project 
   data.projects = projects.filter((p) => p.name !== name);
   fs.writeFileSync(projectsFile(dir), formatProjectsJson(data));
   return project;
+}
+
+const SELF_DESCRIPTION = "Herdr control room: project and agent registry, cross-repo jobs, MR review/fix (Bun + TypeScript)";
+
+/**
+ * Registers the orchestrator repo at `root` as a project (what `/setup` runs): named `orchestrator`, else its folder
+ * name, else skipped. Never throws on a registry conflict; it says why it skipped. Writes nothing unless it adds.
+ */
+export function addSelf(dir: string, reg: Registry, root: string): { status: "added" | "registered" | "skipped"; message: string } {
+  const abs = path.resolve(root);
+  const existing = reg.projects.find((p) => path.resolve(p.path) === abs);
+  if (existing) return { status: "registered", message: `the orchestrator is already registered as ${existing.name}` };
+  const folder = path.basename(abs);
+  const name = ["orchestrator", folder].find((n) => !reg.projects.some((p) => p.name === n));
+  if (!name) {
+    return {
+      status: "skipped",
+      message: `skipped registering the orchestrator: project names "orchestrator" and "${folder}" are taken; run /register ${abs} <name> with a free name`,
+    };
+  }
+  const context = fs.existsSync(path.join(abs, "docs")) ? ["CLAUDE.md", "docs"] : ["CLAUDE.md"];
+  try {
+    addProject(dir, reg, { path: abs, name, description: SELF_DESCRIPTION, context });
+  } catch (e) {
+    if (!(e instanceof OrchError)) throw e;
+    return { status: "skipped", message: `skipped registering the orchestrator: ${e.message}` };
+  }
+  return { status: "added", message: `registered the orchestrator as project ${name} (${abs})` };
 }

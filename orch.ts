@@ -11,7 +11,7 @@ import { resolveFolder } from "./src/folders";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
-import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
+import { addAgent, addSelf, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
 import { diffPosition, type Side } from "./src/diffpos";
 import { listThreads, showMr, type MrInfo } from "./src/mr";
 import { prepareFixWorktree } from "./src/mrworktree";
@@ -69,6 +69,7 @@ const USAGE = `usage: bun orch.ts <command>
   project list [--json]          registered projects, most recently used first
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
+  project add-self               register the orchestrator repo itself (what /setup runs)
   project remove <name>          unregister a project (refused while an unfinished job includes it)
   setup [--json]                 prerequisites, installed agents and registry state, for /setup
   agent add <claude|cursor> | agent default <name> | agent remove <name>
@@ -220,7 +221,7 @@ const commands: Record<string, Command> = {
   async project(args, deps) {
     const [sub, ...rest] = args;
     const usage =
-      "usage: project list [--json] | project add <path> --description D [--name N] [--context a,b,c] | project remove <name>";
+      "usage: project list [--json] | project add <path> --description D [--name N] [--context a,b,c] | project add-self | project remove <name>";
     if (sub === "list") {
       const { values } = parseArgs({ args: rest, options: { json: { type: "boolean" } } });
       const rows = listProjects(deps);
@@ -232,6 +233,11 @@ const commands: Record<string, Command> = {
       if (rest.length !== 1) throw new OrchError(usage);
       const p = removeProject(path.join(deps.root, "registry"), deps.root, rest[0]);
       deps.out(`removed project ${p.name} (${p.path})`);
+      return 0;
+    }
+    if (sub === "add-self") {
+      if (rest.length) throw new OrchError(usage);
+      deps.out(addSelf(path.join(deps.root, "registry"), deps.reg, deps.root).message);
       return 0;
     }
     if (sub !== "add") throw new OrchError(usage);

@@ -19,7 +19,7 @@ The control room for a Herdr session. From this one directory you can:
 
 1. Clone this repo.
 2. Inside Herdr, open Claude Code in the repo folder.
-3. Run `/setup`. It checks the prerequisites, lets you pick your agents and a default, then helps you register your repos.
+3. Run `/setup`. It checks the prerequisites, lets you pick your agents and a default, registers the orchestrator itself, then helps you register your repos.
 4. Run `/intro` for a short tour.
 
 Your registry (`registry/agents.json`, `registry/projects.json`), `docs/` and `jobs/` are local to you and ignored by git. `registry/*-example.json` show the file format.
@@ -40,7 +40,7 @@ Then, for example:
 
 | Command | What it does |
 | --- | --- |
-| `/setup` | First-time setup: checks prerequisites, picks your agents and default, registers your repos. Safe to run again. |
+| `/setup` | First-time setup: checks prerequisites, picks your agents and default, registers the orchestrator itself, then your repos. Safe to run again. |
 | `/intro` | A short explanation of this tool. |
 | `/open [project] [agent] [--continue \| --resume] [--topic T]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to your default agent. If the project has git worktrees, it first asks which folder: the base folder or a worktree. `--continue` resumes the newest session in that folder; `--resume` lets you pick one. The agent is named after its kind (`claude`, then `claude-2`, ... since Herdr names are session-wide); the tab is labelled `T` if given, else Herdr numbers it as usual. |
 | `/bash [project] [--topic T]` | Same tab placement and folder question, a plain terminal with no agent. |

@@ -5,8 +5,8 @@ import path from "node:path";
 import { main } from "../orch";
 import { OrchError } from "../src/errors";
 import { saveJob, type Job, type Stage } from "../src/jobs";
-import { addAgent, AGENT_PRESETS, formatAgentsJson, removeAgent, removeProject, setDefaultAgent } from "../src/manage";
-import { formatProjectsJson, ORCH_ROOT } from "../src/registry";
+import { addAgent, addSelf, AGENT_PRESETS, formatAgentsJson, removeAgent, removeProject, setDefaultAgent } from "../src/manage";
+import { formatProjectsJson, ORCH_ROOT, type Project } from "../src/registry";
 import { testDeps } from "./fakes";
 
 const [CLAUDE, CURSOR] = AGENT_PRESETS.map((p) => p.def);
@@ -208,5 +208,80 @@ describe("removeProject", () => {
     expect(await main(["project", "remove", "shop-api"], t.deps)).toBe(0);
     expect(t.out.at(-1)).toBe(`removed project shop-api (${api})`);
     expect(await main(["project", "remove"], t.deps)).toBe(1);
+  });
+});
+
+describe("addSelf", () => {
+  const DESCRIPTION = "Herdr control room: project and agent registry, cross-repo jobs, MR review/fix (Bun + TypeScript)";
+
+  /** A registry dir holding `projects`, and an orchestrator root (with `CLAUDE.md`, and `docs/` if asked). */
+  function setup(projects: (root: string) => Project[] = () => [], o: { docs?: boolean; folder?: string } = {}) {
+    const root = path.join(tmp("orch-self-"), o.folder ?? "orchestrator");
+    fs.mkdirSync(root);
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "");
+    if (o.docs) fs.mkdirSync(path.join(root, "docs"));
+    const list = projects(root);
+    const dir = regDir(both);
+    fs.writeFileSync(path.join(dir, "projects.json"), formatProjectsJson({ projects: list }));
+    const reg = { projects: list.map((p) => ({ ...p, path: path.resolve(p.path) })), agents: [CLAUDE], defaultAgent: "claude" };
+    return { root, dir, reg, before: read(dir, "projects.json") };
+  }
+  const other = (name: string, p = `/elsewhere/${name}`): Project => ({ name, path: p, description: "X", context: [] });
+  const saved = (dir: string) => JSON.parse(read(dir, "projects.json")).projects;
+
+  test("adds the orchestrator with the fixed entry", () => {
+    const { root, dir, reg } = setup(undefined, { docs: true });
+    expect(addSelf(dir, reg, root)).toEqual({ status: "added", message: `registered the orchestrator as project orchestrator (${root})` });
+    expect(saved(dir)).toEqual([{ name: "orchestrator", path: root, description: DESCRIPTION, context: ["CLAUDE.md", "docs"] }]);
+  });
+
+  test("leaves docs out when the root has none", () => {
+    const { root, dir, reg } = setup();
+    addSelf(dir, reg, root);
+    expect(saved(dir)[0].context).toEqual(["CLAUDE.md"]);
+  });
+
+  test("names it orchestrator whatever the folder is called", () => {
+    const { root, dir, reg } = setup(undefined, { folder: "herdr-orch-xyz" });
+    expect(addSelf(dir, reg, root).status).toBe("added");
+    expect(saved(dir)[0].name).toBe("orchestrator");
+  });
+
+  test("falls back to the folder name when orchestrator is taken", () => {
+    const { root, dir, reg } = setup(() => [other("orchestrator")], { folder: "herdr-orch" });
+    expect(addSelf(dir, reg, root).status).toBe("added");
+    expect(saved(dir).map((p: Project) => p.name)).toEqual(["orchestrator", "herdr-orch"]);
+  });
+
+  test("skips when both names are taken", () => {
+    const { root, dir, reg, before } = setup(() => [other("orchestrator"), other("herdr-orch")], { folder: "herdr-orch" });
+    const r = addSelf(dir, reg, root);
+    expect(r.status).toBe("skipped");
+    expect(r.message).toContain("are taken");
+    expect(read(dir, "projects.json")).toBe(before);
+  });
+
+  test("does nothing when the root is registered under another name", () => {
+    const { root, dir, reg, before } = setup((root) => [other("control", root)]);
+    expect(addSelf(dir, reg, root)).toEqual({ status: "registered", message: "the orchestrator is already registered as control" });
+    expect(read(dir, "projects.json")).toBe(before);
+  });
+
+  test("skips, not throws, when the root is inside a registered project", () => {
+    const { root, dir, reg, before } = setup((root) => [other("home", path.dirname(root))]);
+    const r = addSelf(dir, reg, root);
+    expect(r.status).toBe("skipped");
+    expect(r.message.startsWith("skipped registering the orchestrator: ")).toBe(true);
+    expect(read(dir, "projects.json")).toBe(before);
+  });
+
+  test("cli: project add-self", async () => {
+    const t = testDeps();
+    const dir = regDir(both, { projects: [] });
+    fs.cpSync(dir, path.join(t.deps.root, "registry"), { recursive: true });
+    fs.writeFileSync(path.join(t.deps.root, "CLAUDE.md"), "");
+    expect(await main(["project", "add-self"], t.deps)).toBe(0);
+    expect(t.out.at(-1)!.startsWith("registered the orchestrator as project orchestrator")).toBe(true);
+    expect(await main(["project", "add-self", "x"], t.deps)).toBe(1);
   });
 });

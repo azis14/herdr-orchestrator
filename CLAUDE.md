@@ -27,6 +27,7 @@ bun orch.ts setup [--json]            # prerequisites (gh / glab optional), inst
 bun orch.ts agent add <claude|cursor> | agent default <name> | agent remove <name>
 bun orch.ts project list [--json]     # registered projects, most recently used first
 bun orch.ts project add <path> --description D [--name N] [--context a,b]
+bun orch.ts project add-self          # register the orchestrator repo itself (run by /setup); no-op if already registered
 bun orch.ts project remove <name>     # refused while an unfinished job includes it
 bun orch.ts skills [project] [--resolve <skill>]
 bun orch.ts job new|list|show|stage|log|agent|spawn ...
