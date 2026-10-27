@@ -605,6 +605,7 @@ describe("cli mr", () => {
     const bad = mk("not json");
     expect(await main(["mr", "post", "shop-api", "3"], bad.deps)).toBe(1);
     expect(bad.err.join("\n")).toContain("stdin");
+    expect(bad.err.join("\n")).toContain("nothing was posted");
     expect(bad.posted()).toBe(false);
   });
 

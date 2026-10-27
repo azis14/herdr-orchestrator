@@ -134,14 +134,15 @@ describe("postReview validation", () => {
     expect(err).toBeInstanceOf(OrchError);
     expect(err).not.toBeInstanceOf(OutsideError);
     expect(String(err.message)).toContain("removed line");
+    expect(String(err.message)).toContain("nothing was posted");
     expect(posts(t.forge)).toEqual([]);
   });
 
   test("refuses malformed input", async () => {
     const t = setup(glHandlers());
     const bad = { summary: "s", comments: [{ path: "src/a.ts", line: 0, body: "x" }] } as ReviewInput;
-    await expect(postReview(t.deps, mrInfo("gitlab"), bad)).rejects.toThrow("line");
-    await expect(postReview(t.deps, mrInfo("gitlab"), { summary: " ", comments: [] })).rejects.toThrow("summary");
+    await expect(postReview(t.deps, mrInfo("gitlab"), bad)).rejects.toThrow(/line.*nothing was posted/);
+    await expect(postReview(t.deps, mrInfo("gitlab"), { summary: " ", comments: [] })).rejects.toThrow(/summary.*nothing was posted/);
     expect(posts(t.forge)).toEqual([]);
   });
 
@@ -298,6 +299,7 @@ describe("postReview on GitLab", () => {
     expect(err).toBeInstanceOf(OrchError);
     expect(err.message).toContain("summary");
     expect(err.message).toContain("#note_101");
+    expect(err.message).not.toContain("nothing was posted");
   });
 });
 
@@ -395,6 +397,7 @@ describe("postReview on GitHub", () => {
     expect(err).toBeInstanceOf(OrchError);
     expect(err.message).toContain("pending review");
     expect(err.message).toContain("submit or discard");
+    expect(err.message).toContain("nothing was posted");
     expect(graphqlCalls(t.forge).map((c) => opName(c.query))).toEqual(["AddReview"]);
   });
 
@@ -421,6 +424,7 @@ describe("postReview on GitHub", () => {
     expect(err.message).toContain("interrupted (outcome unknown): src/a.ts:12");
     expect(err.message).toContain("not attempted: src/a.ts:13, src/a.ts:11");
     expect(err.message).toContain("review R1");
+    expect(err.message).not.toContain("nothing was posted");
     expect(err.message).toContain("still pending on https://github.com/acme/shop/pull/9#pullrequestreview-1");
     expect(err.message).toContain("submit or discard");
   });
@@ -432,6 +436,7 @@ describe("postReview on GitHub", () => {
     expect(e1).toBeInstanceOf(OrchError);
     expect(e1.message).toContain("no review id");
     expect(e1.message).toContain(MAYBE);
+    expect(e1.message).not.toContain("nothing was posted");
     expect(graphqlCalls(noId.forge).map((c) => opName(c.query))).toEqual(["AddReview"]);
 
     const transport = setup(
@@ -453,6 +458,7 @@ describe("postReview on GitHub", () => {
     expect(err).toBeInstanceOf(OrchError);
     expect(err.message).toContain("boom");
     expect(err.message).toContain("pending");
+    expect(err.message).not.toContain("nothing was posted");
     expect(err.message).toContain("discussion_r1");
   });
 });

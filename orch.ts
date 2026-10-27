@@ -13,9 +13,9 @@ import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
 import { diffPosition, type Side } from "./src/diffpos";
-import { listThreads, showMr } from "./src/mr";
+import { listThreads, showMr, type MrInfo } from "./src/mr";
 import { prepareFixWorktree } from "./src/mrworktree";
-import { checkBody, formatPost, OutsideError, parseReviewInput, postNote, postReview, replyThread, resolveThread } from "./src/mrpost";
+import { checkBody, formatPost, nothingPosted, OutsideError, parseReviewInput, postNote, postReview, replyThread, resolveThread, type ReviewInput } from "./src/mrpost";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
@@ -499,9 +499,15 @@ const commands: Record<string, Command> = {
           allowPositionals: true,
           options: { "dry-run": { type: "boolean" }, head: { type: "string" }, json: { type: "boolean" } },
         });
-        const input = parseReviewInput(await deps.readStdin());
-        const mr = await showMr(deps, positionals, { fetch: true });
-        checkReviewedHead(mr, values.head);
+        let input: ReviewInput;
+        let mr: MrInfo;
+        try {
+          input = parseReviewInput(await deps.readStdin());
+          mr = await showMr(deps, positionals, { fetch: true });
+          checkReviewedHead(mr, values.head);
+        } catch (e) {
+          throw nothingPosted(e);
+        }
         let r: Awaited<ReturnType<typeof postReview>>;
         try {
           r = await postReview(deps, mr, input, { dryRun: values["dry-run"] });

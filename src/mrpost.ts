@@ -74,6 +74,17 @@ export class OutsideError extends OrchError {
   }
 }
 
+const NOTHING_POSTED = "nothing was posted";
+
+/**
+ * `e` saying "nothing was posted", for an error raised before anything was sent: the caller may fix the cause
+ * and post again. OutsideError (exit 3) and errors already saying so pass through unchanged.
+ */
+export function nothingPosted(e: unknown): unknown {
+  if (!(e instanceof OrchError) || e instanceof OutsideError || e.message.includes(NOTHING_POSTED)) return e;
+  return new OrchError(`${e.message}${e.message.includes("\n") ? "\n" : "; "}${NOTHING_POSTED}`);
+}
+
 const isInt = (n: unknown, min: number) => Number.isInteger(n) && (n as number) >= min;
 
 /** `raw` as a ReviewInput, or an OrchError naming the first bad field. */
@@ -197,8 +208,14 @@ const failure = (c: ReviewComment, error: string): CommentResult => ({ path: c.p
 
 /** Posts the review: one inline thread per comment, then the summary (with any failed comment listed in it). Validates first. */
 export async function postReview(deps: MrDeps, mr: MrInfo, input: ReviewInput, o: { dryRun?: boolean } = {}): Promise<PostResult | DryRun> {
-  const review = checkReviewInput(input);
-  const placed = await validate(deps, mr, review);
+  let review: ReviewInput;
+  let placed: Placed[];
+  try {
+    review = checkReviewInput(input);
+    placed = await validate(deps, mr, review);
+  } catch (e) {
+    throw nothingPosted(e);
+  }
   if (o.dryRun) {
     return {
       summary: review.summary,
@@ -231,7 +248,7 @@ function gitlabPosition(mr: MrInfo, pos: DiffPosition): GitlabPosition {
 const rejectedPosition = (e: unknown) => e instanceof ForgeError && (e.status === 400 || e.status === 422);
 
 async function postGitlab(deps: MrDeps, forge: Forge, mr: MrInfo, input: ReviewInput, placed: Placed[]): Promise<PostResult> {
-  if (!mr.start) throw new OrchError(`no start commit (diff_refs.start_sha) for mr ${mr.number}`);
+  if (!mr.start) throw new OrchError(`no start commit (diff_refs.start_sha) for mr ${mr.number}; ${NOTHING_POSTED}`);
   const mrPath = `projects/${encodeRepo(mr.repo)}/merge_requests/${mr.number}`;
   const results: CommentResult[] = [];
   const failed: ReviewComment[] = [];
@@ -298,7 +315,7 @@ function githubAnchor(c: ReviewComment, pos: DiffPosition): GithubAnchor {
 }
 
 async function postGithub(forge: Forge, mr: MrInfo, input: ReviewInput, placed: Placed[]): Promise<PostResult> {
-  if (!mr.nodeId) throw new OrchError(`no node id for pr ${mr.number}`);
+  if (!mr.nodeId) throw new OrchError(`no node id for pr ${mr.number}; ${NOTHING_POSTED}`);
   let reviewId: string;
   let reviewUrl: string;
   try {
@@ -309,7 +326,7 @@ async function postGithub(forge: Forge, mr: MrInfo, input: ReviewInput, placed: 
     reviewUrl = created.url ?? mr.url;
   } catch (e) {
     if (e instanceof OrchError && /pending review/i.test(e.message)) {
-      throw new OrchError(`you already have a pending review on pr ${mr.number} (${e.message}); submit or discard it on ${mr.url}, then post again`);
+      throw new OrchError(`you already have a pending review on pr ${mr.number} (${e.message}); submit or discard it on ${mr.url}, then post again; ${NOTHING_POSTED}`);
     }
     // The call may have reached GitHub before failing (or answered without an id).
     const why = e instanceof Error ? e.message : String(e);
