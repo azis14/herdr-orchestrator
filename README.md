@@ -19,7 +19,7 @@ The control room for a Herdr session. From this one directory you can:
 
 1. Clone this repo.
 2. Inside Herdr, open Claude Code in the repo folder.
-3. Run `/setup`. It checks the prerequisites, lets you pick your agents and a default, then helps you register your repos.
+3. Run `/setup`. It checks the prerequisites, lets you pick your agents and a default, registers the orchestrator itself, then helps you register your repos.
 4. Run `/intro` for a short tour.
 
 Your registry (`registry/agents.json`, `registry/projects.json`), `docs/` and `jobs/` are local to you and ignored by git. `registry/*-example.json` show the file format.
@@ -40,7 +40,7 @@ Then, for example:
 
 | Command | What it does |
 | --- | --- |
-| `/setup` | First-time setup: checks prerequisites, picks your agents and default, registers your repos. Safe to run again. |
+| `/setup` | First-time setup: checks prerequisites, picks your agents and default, registers the orchestrator itself, then your repos. Safe to run again. |
 | `/intro` | A short explanation of this tool. |
 | `/open [project] [agent] [--continue \| --resume] [--topic T]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to your default agent. If the project has git worktrees, it first asks which folder: the base folder or a worktree. `--continue` resumes the newest session in that folder; `--resume` lets you pick one. The agent is named after its kind (`claude`, then `claude-2`, ... since Herdr names are session-wide); the tab is labelled `T` if given, else Herdr numbers it as usual. |
 | `/bash [project] [--topic T]` | Same tab placement and folder question, a plain terminal with no agent. |
@@ -50,7 +50,7 @@ Then, for example:
 | `/mr-review <MR/PR URL \| project id> [--checks] [--dry-run]` | Reviews a GitLab merge request or GitHub pull request of a registered project with parallel reviewer agents, verifies each finding, and posts the survivors as inline comments plus a summary. Checks are left to CI: only `--checks` also runs the repo's own lint, typecheck and tests on the head, in the background while the reviewers work (outside auto mode the repo's check commands aren't allowed in the background, so they are reported as not run). The review runs in the background (a `mr-review-runner` agent, which dispatches the reviewers and the verifier), so you can keep working or start another review meanwhile (not the same MR while its review is running in this session); the report comes back here. It needs the session scratchpad, and anything that needs you (a leftover pending GitHub review, a login problem) comes back as a stop with what to do. `--dry-run` posts nothing and shows every comment in chat. Invoking it is the approval to post. An MR URL is matched to a project by its `origin` remote's host and path, so an `origin` that uses an SSH host alias (e.g. `git@gitlab-work:group/repo.git`) won't match it, and `<project> <id>` would take the alias for the server's host name: point `origin` at the real host for `/mr-review` and `/mr-fix`. |
 | `/mr-fix <MR/PR URL \| project id> [agent]` | Fixes the open review threads of an MR/PR in an agent tab of its project, in a worktree on the MR's own branch, watched from here (it waits on the agent in the background, so you can keep working). The agent commits and pushes to that branch, replies in each thread and resolves the fixed ones. Refuses fork MRs/PRs. |
 | `/register <path> [name]` | Reads the repo, proposes a name, description and context files, and saves them after you approve. |
-| `/unregister <project>` | Removes a project from the registry (refused while an unfinished job includes it). The repo itself is untouched. |
+| `/unregister <project>` | Removes a project from the registry (refused while an unfinished job includes it). The repo itself is untouched. The orchestrator's own entry can't be removed. |
 | `/agent add\|default\|remove <name>` | Adds Claude or Cursor, switches the default agent, or removes one. |
 | `/job <request>` | Starts a cross-project job. Also `/job list`, `/job show <id>`, `/job resume <id>`. |
 

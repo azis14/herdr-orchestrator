@@ -27,7 +27,8 @@ bun orch.ts setup [--json]            # prerequisites (gh / glab optional), inst
 bun orch.ts agent add <claude|cursor> | agent default <name> | agent remove <name>
 bun orch.ts project list [--json]     # registered projects, most recently used first
 bun orch.ts project add <path> --description D [--name N] [--context a,b]
-bun orch.ts project remove <name>     # refused while an unfinished job includes it
+bun orch.ts project add-self          # register the orchestrator repo itself (run by /setup); no-op if already registered
+bun orch.ts project remove <name>     # refused while an unfinished job includes it, and for the orchestrator itself
 bun orch.ts skills [project] [--resolve <skill>]
 bun orch.ts job new|list|show|stage|log|agent|spawn ...
 bun orch.ts mr show <ref> [--fetch] [--json]          # an MR/PR's metadata (state, fork, branches, head sha); --fetch also makes its head and base local (fetching only what's missing); <ref> is its URL, or <project> <id> (bare number)

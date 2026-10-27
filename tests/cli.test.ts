@@ -391,6 +391,15 @@ describe("cli listings", () => {
     expect(JSON.parse(out.join("\n")).map((p: { name: string }) => p.name)).toEqual(["shop-api", "shop-ui"]);
   });
 
+  test("project list --json marks the orchestrator builtIn", async () => {
+    const { deps, out } = testDeps();
+    deps.reg.projects.push({ name: "orchestrator", path: deps.root, description: "X", context: [] });
+    expect(await main(["project", "list", "--json"], deps)).toBe(0);
+    const rows: { name: string; builtIn: boolean }[] = JSON.parse(out.join("\n"));
+    expect(rows.find((r) => r.name === "orchestrator")?.builtIn).toBe(true);
+    expect(rows.find((r) => r.name === "shop-api")?.builtIn).toBe(false);
+  });
+
   test("project usage mentions list", async () => {
     const { deps, err } = testDeps();
     expect(await main(["project", "frobnicate"], deps)).toBe(1);
