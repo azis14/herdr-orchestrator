@@ -83,12 +83,16 @@ describe("prepareFixWorktree", () => {
 
   test("reuses a worktree that already has the branch", async () => {
     const wt = fs.mkdtempSync(path.join(os.tmpdir(), "orch-wt-"));
-    const t = setup({ worktrees: [{ path: wt, branch: "fix/cart" }] });
-    expect(await prepareFixWorktree(t.git, t.project, mrInfo())).toEqual({ path: wt, branch: "fix/cart", created: false });
-    expect(t.calls.some((c) => c.args[0] === "worktree" && c.args[1] === "add")).toBe(false);
-    expect(t.calls).toContainEqual({ cwd: wt, args: ["status", "--porcelain"] });
-    expect(t.calls.at(-2)).toEqual({ cwd: wt, args: ["pull", "--ff-only", "origin", "fix/cart"] });
-    expect(t.calls.at(-1)).toEqual({ cwd: wt, args: ["rev-list", "--count", "refs/remotes/origin/fix/cart..HEAD"] });
+    try {
+      const t = setup({ worktrees: [{ path: wt, branch: "fix/cart" }] });
+      expect(await prepareFixWorktree(t.git, t.project, mrInfo())).toEqual({ path: wt, branch: "fix/cart", created: false });
+      expect(t.calls.some((c) => c.args[0] === "worktree" && c.args[1] === "add")).toBe(false);
+      expect(t.calls).toContainEqual({ cwd: wt, args: ["status", "--porcelain"] });
+      expect(t.calls.at(-2)).toEqual({ cwd: wt, args: ["pull", "--ff-only", "origin", "fix/cart"] });
+      expect(t.calls.at(-1)).toEqual({ cwd: wt, args: ["rev-list", "--count", "refs/remotes/origin/fix/cart..HEAD"] });
+    } finally {
+      fs.rmSync(wt, { recursive: true, force: true });
+    }
   });
 
   test("creates from origin when there is no local branch", async () => {
