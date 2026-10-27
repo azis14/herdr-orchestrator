@@ -59,7 +59,7 @@ Only if you committed anything:
 
 ## 6. Reply and resolve
 
-Write replies as the `mr-comments` skill's "Replies" section says (find it with `orch skills <project> --resolve mr-comments`: a `repo` copy is the repo's own, otherwise read the file at the path it prints). The repo's own comment guidance wins on tone and audience. Every reply and note ends with this marker as its own last line:
+Write replies as the `mr-comments` skill's "Replies" section says (find it with `orch skills <project> --resolve mr-comments` and read the file at the path it prints, whichever copy it is). The repo's own comment guidance wins on tone and audience. Every reply and note ends with this marker as its own last line:
 
 ```
 <!-- orch:mr-fix -->

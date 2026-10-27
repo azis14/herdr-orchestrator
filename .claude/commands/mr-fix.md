@@ -3,7 +3,7 @@ description: Fix the open review threads on a GitLab merge request or GitHub pul
 argument-hint: "<MR/PR URL | project id> [agent]"
 model: opus
 effort: high
-allowed-tools: Bash(bun orch.ts mr:*), Bash(bun orch.ts open:*), Bash(bun orch.ts skills:*), Bash(herdr workspace list:*), Bash(herdr tab list:*), Bash(herdr agent:*), Bash(herdr pane read:*), Bash(herdr pane send-keys:*), Bash(herdr pane close:*), Bash(git worktree remove:*), Bash(git -C * worktree remove *), Bash(pwd), Read, Grep, Glob, AskUserQuestion
+allowed-tools: Bash(bun orch.ts mr:*), Bash(bun orch.ts open:*), Bash(bun orch.ts skills:*), Bash(herdr workspace list:*), Bash(herdr tab list:*), Bash(herdr agent:*), Bash(herdr pane read:*), Bash(herdr pane send-keys:*), Bash(herdr pane close:*), Bash(git -C * worktree remove *), Bash(pwd), Read, Grep, Glob, AskUserQuestion
 ---
 
 Fix the MR/PR in `$ARGUMENTS`: its URL, or a registered project and an id (`shop-api 42`, `shop-api !42`, `shop-ui #7`), then optionally an agent name (default: the default agent). Pass an id to `bun orch.ts` as a bare number, `!` or `#` stripped (`shop-ui 7`): unquoted, the shell reads `#7` as a comment.
@@ -45,14 +45,13 @@ Then handle the trust prompt exactly as `/open` step 4 does (`.claude/commands/o
 
 ## 5. Hand it the work
 
-`ORCH_ROOT` is this orchestrator's root: run `pwd` (you are in it). Pick the fix process, first match wins:
+`ORCH_ROOT` is this orchestrator's root: run `pwd` (you are in it). The agent loads commands and skills from its own folder, the worktree `<path>` on the MR's branch, not from `<projectPath>`, so every "exists" below is checked under `<path>` (with Glob or Read). Pick the fix process, first match wins:
 
-1. The agent is Claude and `<projectPath>/.claude/commands/mr-fix.md` exists → first line `/mr-fix <url>` (repo rules win).
-2. Otherwise `bun orch.ts skills <project> --resolve mr-fix`:
-   - `repo <path>` and the agent is Claude → first line `/mr-fix <url>`;
-   - anything else (an `orchestrator` copy, or any copy for Cursor) → first line `Read and follow the skill at <path> for <url>`.
+1. The agent is Claude and `<path>/.claude/commands/mr-fix.md` exists → first line `/mr-fix <url>` (repo rules win).
+2. `bun orch.ts skills <project> --resolve mr-fix` prints `repo <skillPath>`, and the same repo-relative path exists in the worktree (`<wtSkill>`: `<skillPath>` with its `<projectPath>` prefix swapped for `<path>`) → for Claude with `<wtSkill>` under `.claude/skills/`, first line `/mr-fix <url>`; otherwise `Read and follow the skill at <wtSkill> for <url>`.
+3. Otherwise → first line `Read and follow the skill at <ORCH_ROOT>/.agents/skills/mr-fix/SKILL.md for <url>`.
 
-The prompt is that first line, then this block filled in. It has no apostrophes, so send it in single quotes: `herdr agent prompt <name> '<prompt>'` (no `--wait`; step 6 waits).
+The prompt is that first line, then this block filled in. Send it in single quotes, with every `'` in the filled-in prompt (a URL or branch can carry one) written `'\''`: `herdr agent prompt <name> '<prompt>'` (no `--wait`; step 6 waits).
 
 ```
 MR: <url> (<kind> <number>, branch <sourceBranch> into <targetBranch>)
@@ -64,10 +63,11 @@ Rules (from the orchestrator):
 - Invoking /mr-fix approved committing, pushing this branch (git push origin HEAD, never force), replying on its threads and resolving the threads you fixed. Nothing more: no approving, merging, closing, new MRs, or editing anyone else's notes.
 - Still stop and ask before adding or changing environment variables, secrets, feature flags, permissions, or anything that touches live infrastructure.
 - Follow the rules of this repo (CLAUDE.md, AGENTS.md, rules files, skills) wherever they say more than these.
+- End every reply and note you post with <!-- orch:mr-fix --> on its own last line, so a later run knows the thread is waiting on the reviewer.
 - Finish with the results report: a table (finding, fixed with commit or left open with reason, reply link), then the check results and anything the reviewer now has to decide.
 ```
 
-Leave out the "Orchestrator CLI" line when the first line is the repo's own `/mr-fix` command (it has its own way to reach the server).
+Leave out the "Orchestrator CLI" line only for case 1, the repo's own `/mr-fix` command (it has its own way to reach the server).
 
 ## 6. Watch
 
@@ -81,7 +81,7 @@ Drive the agent as the `claude-code` or `cursor-cli` skill describes (reading, b
    - **Done** (it has given its results report) → step 7. If the report doesn't fit what `read` recovers, ask it for the report as a file path, as the `claude-code` skill says, and read that file.
    - **Still `working`** after a timeout → compare with the screen from the previous read. Unchanged apart from a spinner or timer for these 15 minutes → ask "`<name>` has shown nothing new for 15 minutes on `<label>`." with "Keep waiting" / "Stop watching". "Stop watching" leaves the agent running: tell the user where it is (workspace, tab, agent name) and end here, with no cleanup offer. A changed screen → back to 1.
    - Anything you can't classify → show the user the screen's last lines and ask what to do; never guess.
-4. After sending anything (the step 5 prompt included), `herdr agent wait <name> --until working --timeout 30000` before going back to 1, so the next wait doesn't settle on the state you just left. A timeout here means it never started: read the screen before resending anything.
+4. After sending anything (the step 5 prompt included), `herdr agent wait <name> --until working --timeout 30000`, so the next wait doesn't settle on the state you just left, then read the screen once as the baseline for the stall check, and go back to 1. A timeout here means it never started: read the screen before resending anything.
 
 The agent may stop before pushing because checks failed before its fixes too: that is a question for the user like any other (e.g. "Push anyway" / "Don't push"), sent back as their words.
 
@@ -93,5 +93,5 @@ From the agent's report: the results table (each finding: fixed with its commit,
 
 Two yes/no questions; do only what is picked:
 
-- "Close the fix tab `<label>`?" with "Close it" / "Leave it" → `herdr pane close <P>`.
+- "Close the fix tab `<label>`?" with "Close it" / "Leave it" → `herdr pane close <P>`. On "Leave it", say the worktree stays at `<path>` with the agent, and stop.
 - Only if the tab was closed and `path` is exactly `<projectPath>.worktrees/<kind>-<number>` (the one `mr worktree` manages; never a worktree the user or a job made): "Remove the worktree `<path>`?" with "Remove it" / "Keep it" → `git -C <projectPath> worktree remove <path>`, never `--force`. If git refuses (changes left in it), show its message and leave the worktree. The local branch stays either way.
