@@ -81,10 +81,10 @@ const USAGE = `usage: bun orch.ts <command>
   job spawn <id> <project> [agent] [--repo-worktree] [--trust]
   mr show <ref> [--fetch] [--json]
   mr threads <ref> [--json]
-  mr position <ref> --path P --line N [--old-path O] [--side new|old] [--json]
-  mr post <ref> [--dry-run] [--json]
+  mr position <ref> --path P --line N [--old-path O] [--side new|old] [--head SHA] [--json]
+  mr post <ref> [--dry-run] [--head SHA] [--json]
                                  post a review ({summary, comments} JSON on stdin); exits 3, posting nothing,
-                                 if a comment is not on a changed line
+                                 if a comment is not on a changed line; --head SHA refuses (exit 1) if the head moved
   mr note <ref> [--json]         post a general note (body on stdin); prints its url
   mr reply <ref> --thread ID [--json]
                                  reply in a review thread (body on stdin); prints the reply's url
@@ -97,6 +97,13 @@ const USAGE = `usage: bun orch.ts <command>
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
 
 type Command = (args: string[], deps: Deps) => Promise<number>;
+
+/** Refuses when the MR's head isn't the `reviewed` one (a push landed during the review): its line numbers may have shifted. */
+function checkReviewedHead(mr: { kind: string; head: string }, reviewed: string | undefined): void {
+  if (reviewed !== undefined && reviewed !== mr.head) {
+    throw new OrchError(`the ${mr.kind} moved: head is now ${mr.head}, reviewed ${reviewed}; nothing was posted`);
+  }
+}
 
 const commands: Record<string, Command> = {
   async open(args, deps) {
@@ -459,6 +466,7 @@ const commands: Record<string, Command> = {
             "old-path": { type: "string" },
             line: { type: "string" },
             side: { type: "string" },
+            head: { type: "string" },
             json: { type: "boolean" },
           },
         });
@@ -468,6 +476,7 @@ const commands: Record<string, Command> = {
         const side = values.side ?? "new";
         if (side !== "new" && side !== "old") throw new OrchError(`--side must be new or old, got "${side}"`);
         const mr = await showMr(deps, positionals, { fetch: true });
+        checkReviewedHead(mr, values.head);
         if (!mr.base) throw new OrchError(`no base commit for ${mr.kind} ${mr.number}`);
         const pos = await diffPosition(deps.git, mr.projectPath, mr.base, mr.head, {
           path: values.path,
@@ -488,10 +497,11 @@ const commands: Record<string, Command> = {
         const { positionals, values } = parseArgs({
           args: rest,
           allowPositionals: true,
-          options: { "dry-run": { type: "boolean" }, json: { type: "boolean" } },
+          options: { "dry-run": { type: "boolean" }, head: { type: "string" }, json: { type: "boolean" } },
         });
         const input = parseReviewInput(await deps.readStdin());
         const mr = await showMr(deps, positionals, { fetch: true });
+        checkReviewedHead(mr, values.head);
         let r: Awaited<ReturnType<typeof postReview>>;
         try {
           r = await postReview(deps, mr, input, { dryRun: values["dry-run"] });

@@ -608,6 +608,57 @@ describe("cli mr", () => {
     expect(bad.posted()).toBe(false);
   });
 
+  test("mr position and mr post --head refuse when the MR moved since the review", async () => {
+    const reg = testRegistry();
+    const diffs: string[][] = [];
+    const git: GitRunner = async (cwd, args) => {
+      if (args.join(" ") === "remote get-url origin") {
+        return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      }
+      if (args[0] === "diff") {
+        diffs.push(args);
+        return { code: 0, stdout: "@@ -1,2 +1,3 @@\n a\n+b\n c\n", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const mk = () => {
+      const forge = fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h2", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h2" } },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+        "POST projects/g%2Fp/merge_requests/3/discussions": (_a, s) => ({ stdout: { id: "d1", notes: [{ id: 5, position: JSON.parse(s ?? "{}").position }] } }),
+        "POST projects/g%2Fp/merge_requests/3/notes": () => ({ stdout: { id: 6 } }),
+      });
+      const review = JSON.stringify({ summary: "## Review", comments: [{ path: "a.ts", line: 2, body: "y" }] });
+      return { ...testDeps({}, { reg, git, forge, readStdin: async () => review }), posted: () => forge.calls.some((c) => c.args.includes("POST")) };
+    };
+    const moved = "the mr moved: head is now h2, reviewed h1; nothing was posted";
+
+    const pos = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--head", "h1", "--path", "a.ts", "--line", "2"], pos.deps)).toBe(1);
+    expect(pos.err.join("\n")).toContain(moved);
+    expect(diffs).toEqual([]);
+
+    const post = mk();
+    expect(await main(["mr", "post", "shop-api", "3", "--head", "h1", "--json"], post.deps)).toBe(1);
+    expect(post.err.join("\n")).toContain(moved);
+    expect(post.posted()).toBe(false);
+
+    const dry = mk();
+    expect(await main(["mr", "post", "shop-api", "3", "--head", "h1", "--dry-run"], dry.deps)).toBe(1);
+    expect(dry.err.join("\n")).toContain(moved);
+
+    const samePos = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--head", "h2", "--path", "a.ts", "--line", "2", "--json"], samePos.deps)).toBe(0);
+    expect(JSON.parse(samePos.out[0])).toMatchObject({ kind: "added", line: 2 });
+
+    const samePost = mk();
+    expect(await main(["mr", "post", "shop-api", "3", "--head", "h2", "--json"], samePost.deps)).toBe(0);
+    expect(samePost.posted()).toBe(true);
+  });
+
   test("mr worktree prints the fix worktree path, and --protect refuses the source branch", async () => {
     const reg = testRegistry();
     const dir = `${reg.projects[0].path}.worktrees/mr-3`;
