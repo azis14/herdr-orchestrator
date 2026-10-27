@@ -14,6 +14,7 @@ import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAge
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
 import { diffPosition, type Side } from "./src/diffpos";
 import { listThreads, showMr } from "./src/mr";
+import { formatPost, OutsideError, parseReviewInput, postReview } from "./src/mrpost";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
@@ -80,7 +81,10 @@ const USAGE = `usage: bun orch.ts <command>
   mr show <ref> [--fetch] [--json]
   mr threads <ref> [--json]
   mr position <ref> --path P --line N [--old-path O] [--side new|old] [--json]
-  mr post|note|reply|resolve|worktree ...
+  mr post <ref> [--dry-run] [--json]
+                                 post a review ({summary, comments} JSON on stdin); exits 3, posting nothing,
+                                 if a comment is not on a changed line
+  mr note|reply|resolve|worktree ...
                                  review and fix a GitLab MR / GitHub PR; <ref> is its URL, or <project> <id> (id 42, !42 or #42)`;
 
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
@@ -472,6 +476,26 @@ const commands: Record<string, Command> = {
           deps.out(`${pos.kind} ${pos.path}${pos.line !== undefined ? ` line ${pos.line}` : ""}${pos.oldLine !== undefined ? ` oldLine ${pos.oldLine}` : ""}`);
         }
         return pos.kind === "outside" ? 3 : 0;
+      }
+      case "post": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { "dry-run": { type: "boolean" }, json: { type: "boolean" } },
+        });
+        const input = parseReviewInput(await deps.readStdin());
+        const mr = await showMr(deps, positionals, { fetch: true });
+        let r: Awaited<ReturnType<typeof postReview>>;
+        try {
+          r = await postReview(deps, mr, input, { dryRun: values["dry-run"] });
+        } catch (e) {
+          if (!(e instanceof OutsideError)) throw e;
+          deps.out(JSON.stringify({ outside: e.outside }, null, 2));
+          deps.err(`orch: ${e.message}`);
+          return 3;
+        }
+        deps.out(values.json ? JSON.stringify(r, null, 2) : formatPost(r));
+        return 0;
       }
       default:
         throw new OrchError("usage: mr show|threads|position|post|note|reply|resolve|worktree ...");

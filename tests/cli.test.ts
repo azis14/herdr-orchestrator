@@ -559,6 +559,55 @@ describe("cli mr", () => {
     expect(err.join("\n")).toContain("--path");
   });
 
+  test("mr post reads stdin and exits 3 listing outside comments", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) => {
+      if (args.join(" ") === "remote get-url origin") {
+        return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      }
+      if (args[0] === "diff") return { code: 0, stdout: "@@ -1,2 +1,3 @@\n a\n+b\n c\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const mk = (stdin: string) => {
+      const forge = fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h" } },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+        "POST projects/g%2Fp/merge_requests/3/discussions": (_a, s) => ({ stdout: { id: "d1", notes: [{ id: 5, position: JSON.parse(s ?? "{}").position }] } }),
+        "POST projects/g%2Fp/merge_requests/3/notes": () => ({ stdout: { id: 6 } }),
+      });
+      const posted = () => forge.calls.some((c) => c.args.includes("POST"));
+      return { ...testDeps({}, { reg, git, forge, readStdin: async () => stdin }), posted };
+    };
+    const review = (line: number) => JSON.stringify({ summary: "## Review", comments: [{ path: "a.ts", line, body: "x" }, { path: "a.ts", line: 2, body: "y" }] });
+
+    const outside = mk(review(50));
+    expect(await main(["mr", "post", "shop-api", "3"], outside.deps)).toBe(3);
+    expect(JSON.parse(outside.out.join("\n"))).toEqual({ outside: [{ path: "a.ts", line: 50, body: "x" }] });
+    expect(outside.posted()).toBe(false);
+
+    const dry = mk(review(2));
+    expect(await main(["mr", "post", "shop-api", "3", "--dry-run", "--json"], dry.deps)).toBe(0);
+    expect(JSON.parse(dry.out.join("\n")).comments).toHaveLength(2);
+    expect(dry.posted()).toBe(false);
+
+    const real = mk(review(2));
+    expect(await main(["mr", "post", "shop-api", "3", "--json"], real.deps)).toBe(0);
+    expect(JSON.parse(real.out.join("\n"))).toMatchObject({ summaryUrl: "https://gitlab.x.io/g/p/-/merge_requests/3#note_6" });
+    expect(real.posted()).toBe(true);
+
+    const plain = mk(review(2));
+    expect(await main(["mr", "post", "shop-api", "3"], plain.deps)).toBe(0);
+    expect(plain.out.join("\n")).toContain("placed a.ts:2");
+
+    const bad = mk("not json");
+    expect(await main(["mr", "post", "shop-api", "3"], bad.deps)).toBe(1);
+    expect(bad.err.join("\n")).toContain("stdin");
+    expect(bad.posted()).toBe(false);
+  });
+
   test("mr with no subcommand prints mr usage", async () => {
     const { deps, err } = testDeps();
     expect(await main(["mr"], deps)).toBe(1);
