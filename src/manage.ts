@@ -115,13 +115,16 @@ export function removeAgent(dir: string, root: string, name: string): void {
   fs.writeFileSync(agentsFile(dir), formatAgentsJson(data));
 }
 
-/** Removes a project's registry entry unless an unfinished job includes it. Never touches the repo, its worktrees or Herdr. */
+/** Removes a project's registry entry unless it's the orchestrator itself (at `root`) or an unfinished job includes it. Never touches the repo, its worktrees or Herdr. */
 export function removeProject(dir: string, root: string, name: string): Project {
   const data = readJson(projectsFile(dir));
   const projects: Project[] = data.projects ?? [];
   const project = projects.find((p) => p.name === name);
   if (!project) {
     throw new OrchError(`unknown project "${name}". Known projects: ${projects.map((p) => p.name).join(", ")}`);
+  }
+  if (path.resolve(project.path) === path.resolve(root)) {
+    throw new OrchError(`project "${name}" is the orchestrator itself and can't be unregistered`);
   }
   const jobs = openJobs(root).filter((j) => j.projects.includes(name));
   if (jobs.length) throw blockedByJobs(`project "${name}"`, jobs);

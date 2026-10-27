@@ -201,6 +201,22 @@ describe("removeProject", () => {
     removeProject(dir, jobsRoot([job("20261023-old", "done", { projects: ["shop-api"] })]), "shop-api");
   });
 
+  test("removeProject refuses the orchestrator's own entry, whatever its name", () => {
+    const root = jobsRoot();
+    const dir = regDir(both);
+    fs.writeFileSync(path.join(dir, "projects.json"), formatProjectsJson({ projects: [{ name: "control", path: root, description: "X", context: [] }] }));
+    const before = read(dir, "projects.json");
+    expect(() => removeProject(dir, root, "control")).toThrow('project "control" is the orchestrator itself and can\'t be unregistered');
+    expect(read(dir, "projects.json")).toBe(before);
+  });
+
+  test("removeProject compares resolved paths for the orchestrator", () => {
+    const root = jobsRoot();
+    const dir = regDir(both);
+    fs.writeFileSync(path.join(dir, "projects.json"), formatProjectsJson({ projects: [{ name: "orchestrator", path: root + "/", description: "X", context: [] }] }));
+    expect(() => removeProject(dir, root, "orchestrator")).toThrow("is the orchestrator itself");
+  });
+
   test("cli: project remove", async () => {
     const t = testDeps();
     const { dir, api } = setup();

@@ -70,7 +70,7 @@ const USAGE = `usage: bun orch.ts <command>
   project add <path> --description D [--name N] [--context a,b,c]
                                  register a repo as a project
   project add-self               register the orchestrator repo itself (what /setup runs)
-  project remove <name>          unregister a project (refused while an unfinished job includes it)
+  project remove <name>          unregister a project (refused while an unfinished job includes it, and for the orchestrator itself)
   setup [--json]                 prerequisites, installed agents and registry state, for /setup
   agent add <claude|cursor> | agent default <name> | agent remove <name>
                                  register an agent, make it the default, or remove it
@@ -226,7 +226,8 @@ const commands: Record<string, Command> = {
       const { values } = parseArgs({ args: rest, options: { json: { type: "boolean" } } });
       const rows = listProjects(deps);
       const ago = (iso: string | null) => (iso ? `${formatAge(deps.now().getTime() - Date.parse(iso))} ago` : "never");
-      deps.out(values.json ? JSON.stringify(rows, null, 2) : rows.map((r) => `${r.name}  ${ago(r.lastUsed)}  ${r.description}`).join("\n"));
+      const builtIn = (r: { path: string }) => path.resolve(r.path) === path.resolve(deps.root);
+      deps.out(values.json ? JSON.stringify(rows.map((r) => ({ ...r, builtIn: builtIn(r) })), null, 2) : rows.map((r) => `${r.name}  ${ago(r.lastUsed)}  ${r.description}`).join("\n"));
       return 0;
     }
     if (sub === "remove") {
