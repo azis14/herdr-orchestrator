@@ -6,7 +6,13 @@ effort: high
 allowed-tools: Bash(bun orch.ts mr:*), Bash(bun orch.ts skills:*), Bash(git:*), Read, Grep, Glob, Agent, AskUserQuestion
 ---
 
-Review the MR/PR in `$ARGUMENTS`: its URL, or a registered project and an id (`shop-api 42`, `shop-api !42`, `shop-ui #7`), plus `--dry-run` to post nothing and show every comment in chat instead. Invoking this command is the approval to post. If `$ARGUMENTS` names no MR, show the usage line above and stop.
+Review the MR/PR in `$ARGUMENTS`: its URL, or a registered project and an id (`shop-api 42`, `shop-api !42`, `shop-ui #7`), plus `--dry-run` to post nothing and show every comment in chat instead. Invoking this command is the approval to post. Pass an id to `bun orch.ts` as a bare number, `!` or `#` stripped (`shop-ui 7`): unquoted, the shell reads `#7` as a comment.
+
+If `$ARGUMENTS` names no MR, show this usage and stop:
+
+```
+/mr-review <MR/PR URL | project id> [--dry-run]
+```
 
 Load the `reviewing-mrs` skill and follow it with that reference and flag.
 

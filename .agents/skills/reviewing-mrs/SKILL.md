@@ -11,7 +11,7 @@ Every platform call goes through `bun orch.ts mr …`, run from the orchestrator
 
 ## 1. Resolve
 
-`orch mr show <ref> --fetch --json`. Keep `project`, `projectPath`, `url`, `kind`, `number`, `title`, `description`, `state`, `fork`, `base`, `head`.
+`orch mr show <ref> --fetch --json`, with an id passed as a bare number (`!42` or `#7` → `42`, `7`; unquoted, the shell reads `#7` as a comment). Keep `project`, `projectPath`, `url`, `kind`, `number`, `title`, `description`, `state`, `fork`, `base`, `head`.
 
 - `state` isn't `open`, or `base` or `head` is empty → say so and stop.
 - Several projects have this origin → the error names them. Ask which with AskUserQuestion, one option per name (more than 4: 3 per page plus "More…"), never picking for the user, and re-run with `<project> <number>` (the number from the URL).
@@ -79,7 +79,9 @@ Each check failure becomes a `blocking` finding you write yourself, on the line 
 
 ## 5. Verify
 
-Number every candidate from 0 and dispatch one `mr-verifier` (`subagent_type: "mr-verifier"`) with them all, as JSON with their `index`, plus the MR facts, `<WT>` and the guidance paths. It returns `{index, verdict, reason}` per candidate. Keep only `confirmed` ones; a candidate it skipped counts as refuted.
+Number every reviewer candidate from 0 and dispatch one `mr-verifier` (`subagent_type: "mr-verifier"`) with them all, as JSON with their `index` and the `focus` of the reviewer that raised it, plus the MR facts, `<WT>` and the guidance paths. It returns `{index, verdict, reason}` per candidate. Keep only `confirmed` ones; a candidate it skipped counts as refuted.
+
+If the verifier fails or returns something other than that array, dispatch it once more with the same brief. If it fails again, post no reviewer findings: say so in chat and in the summary ("Reviewer findings not posted: verification failed"), and still post the summary with the checks and the check-failure findings.
 
 Remove the head worktree now (step 3).
 
@@ -110,6 +112,8 @@ Exit 3 (`outside`): the line isn't in the diff. Move the finding to the summary'
 
 Write the summary as `mr-comments` describes: counts by severity, check results, owned paths (CODEOWNERS), off-diff findings. No findings → its "No changes needed" form and `"comments": []`.
 
+Just before posting (a dry run too), run `orch mr show <ref> --json` once more. If its `head` differs from the head you reviewed, stop and tell the user the MR moved during the review; post nothing.
+
 Write `{"summary": "…", "comments": [{"path", "oldPath"?, "line", "side", "body", "suggestion"?}]}` to a file in the scratchpad, then:
 
 ```bash
@@ -117,7 +121,7 @@ orch mr post <ref> --json [--dry-run] < <file>
 ```
 
 - **Exit 3:** nothing was posted; it prints `{"outside": [...]}`. For each listed comment whose line `mr position` placed, the suggestion's range is what's outside: drop the suggestion, keep the comment. Move the rest to the summary. Post again.
-- **Other errors:** report them as is. If the error says some comments were already posted, or a review may be left pending, say so and stop; never post a second time.
+- **Other errors:** after any error other than exit 3 from a non-dry-run `mr post`, never run it again; report it as is.
 - **Results:** one per comment, `placed`, `unplaced` (posted as a general comment without a line; never re-post it) or `failed` (`orch` already listed it in the summary under "Not on a changed line"), plus `summaryUrl`.
 
 ## 9. Report in chat
@@ -133,5 +137,5 @@ orch mr post <ref> --json [--dry-run] < <file>
 - Call the platform's API or CLI yourself. `orch mr` does all of it.
 - Touch the user's checkout: switch its branch, stash, reset, or write files in it.
 - Run a fork's code.
-- Post a finding the verifier didn't confirm, or drop one that couldn't be placed without saying so.
+- Post a reviewer finding the verifier didn't confirm (check failures are the exception: the run is their evidence), or drop one that couldn't be placed without saying so.
 - Leave the head worktree behind.
