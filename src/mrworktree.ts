@@ -75,12 +75,13 @@ export async function prepareFixWorktree(
   }
 
   const status = await git(dir, ["status", "--porcelain"]);
-  if (status.code !== 0) throw new OrchError(`git status in ${dir} failed: ${gitMessage(status)}`);
+  const made = created ? `created ${dir}; ` : "";
+  if (status.code !== 0) throw new OrchError(`${made}git status in ${dir} failed: ${gitMessage(status)}`);
   if (status.stdout.trim() !== "") {
-    throw new OrchError(`${dir} has uncommitted changes; commit or discard them first. Nothing was stashed or reset.`);
+    throw new OrchError(`${made}${dir} has uncommitted changes; commit or discard them first. Nothing was stashed or reset.`);
   }
   const pull = await git(dir, ["pull", "--ff-only", "origin", b]);
-  if (pull.code !== 0) throw new OrchError(`git pull --ff-only origin ${b} failed in ${dir}: ${gitMessage(pull)}`);
+  if (pull.code !== 0) throw new OrchError(`${made}git pull --ff-only origin ${b} failed in ${dir}: ${gitMessage(pull)}`);
 
   return { path: dir, branch: b, created };
 }

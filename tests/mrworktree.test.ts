@@ -26,10 +26,12 @@ interface Setup {
   dirty?: boolean;
   pull?: { code: number; stdout: string; stderr: string };
   fetch?: { code: number; stdout: string; stderr: string };
+  /** Reuse an existing project (default: a fresh one). */
+  project?: ReturnType<typeof testRegistry>["projects"][number];
 }
 
 function setup(s: Setup = {}) {
-  const project = testRegistry(["shop-api"]).projects[0];
+  const project = s.project ?? testRegistry(["shop-api"]).projects[0];
   const calls: { cwd: string; args: string[] }[] = [];
   const list =
     [{ path: project.path, branch: s.baseBranch ?? "dev" }, ...(s.worktrees ?? [])]
@@ -79,6 +81,7 @@ describe("prepareFixWorktree", () => {
     const t = setup({ worktrees: [{ path: wt, branch: "fix/cart" }] });
     expect(await prepareFixWorktree(t.git, t.project, mrInfo())).toEqual({ path: wt, branch: "fix/cart", created: false });
     expect(t.calls.some((c) => c.args[0] === "worktree" && c.args[1] === "add")).toBe(false);
+    expect(t.calls).toContainEqual({ cwd: wt, args: ["status", "--porcelain"] });
     expect(t.calls.at(-1)).toEqual({ cwd: wt, args: ["pull", "--ff-only", "origin", "fix/cart"] });
   });
 
@@ -102,8 +105,40 @@ describe("prepareFixWorktree", () => {
   test("refuses an existing fix path that isn't one of the project's worktrees", async () => {
     const t = setup();
     fs.mkdirSync(t.wtDir, { recursive: true });
-    await expect(prepareFixWorktree(t.git, t.project, mrInfo())).rejects.toThrow("not a worktree");
-    expect(t.calls.some((c) => c.args[0] === "worktree" && c.args[1] === "add")).toBe(false);
+    try {
+      await expect(prepareFixWorktree(t.git, t.project, mrInfo())).rejects.toThrow("not a worktree");
+      expect(t.calls.some((c) => c.args[0] === "worktree" && c.args[1] === "add")).toBe(false);
+      expect(mutating(t.calls)).toEqual([]);
+    } finally {
+      fs.rmSync(path.dirname(t.wtDir), { recursive: true, force: true });
+    }
+  });
+
+  test("refuses when the fix path is a project worktree on a different branch", async () => {
+    const t = setup();
+    fs.mkdirSync(t.wtDir, { recursive: true });
+    const other = setup({ project: t.project, worktrees: [{ path: t.wtDir, branch: "feature/other" }] });
+    try {
+      await expect(prepareFixWorktree(other.git, t.project, mrInfo())).rejects.toThrow("feature/other");
+      expect(other.calls.some((c) => c.args[0] === "worktree" && c.args[1] === "add")).toBe(false);
+      expect(other.calls.some((c) => c.args[0] === "pull")).toBe(false);
+      expect(mutating(other.calls)).toEqual([]);
+    } finally {
+      fs.rmSync(path.dirname(t.wtDir), { recursive: true, force: true });
+    }
+  });
+
+  test("refuses a source branch starting with a dash", async () => {
+    const t = setup();
+    await expect(prepareFixWorktree(t.git, t.project, mrInfo({ sourceBranch: "-evil" }))).rejects.toThrow("usable source branch");
+    expect(t.calls).toEqual([]);
+  });
+
+  test("names a just-created worktree when it then fails", async () => {
+    const dirty = setup({ dirty: true });
+    await expect(prepareFixWorktree(dirty.git, dirty.project, mrInfo())).rejects.toThrow(`created ${dirty.wtDir}; `);
+    const pulled = setup({ pull: fail("fatal: Not possible to fast-forward, aborting.") });
+    await expect(prepareFixWorktree(pulled.git, pulled.project, mrInfo())).rejects.toThrow(`created ${pulled.wtDir}; `);
   });
 
   test("refuses when the fetch fails", async () => {
@@ -114,6 +149,7 @@ describe("prepareFixWorktree", () => {
   test("stops on uncommitted changes", async () => {
     const t = setup({ dirty: true });
     await expect(prepareFixWorktree(t.git, t.project, mrInfo())).rejects.toThrow("uncommitted");
+    expect(t.calls).toContainEqual({ cwd: t.wtDir, args: ["status", "--porcelain"] });
     expect(t.calls.some((c) => c.args[0] === "pull")).toBe(false);
     expect(mutating(t.calls)).toEqual([]);
   });
