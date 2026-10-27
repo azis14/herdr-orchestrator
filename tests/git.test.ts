@@ -66,4 +66,41 @@ describe("gitRemote", () => {
       "git fetch origin dev timed out after 60s; check that origin is reachable",
     );
   });
+
+  const lockErr = "error: cannot lock ref 'refs/remotes/origin/dev': Unable to create '/r/.git/refs/remotes/origin/dev.lock': File exists.";
+  const scripted = (results: Array<{ code: number; stdout: string; stderr: string; timedOut?: boolean }>) => {
+    let calls = 0;
+    const git: GitRunner = async () => results[Math.min(calls++, results.length - 1)]!;
+    return { git, calls: () => calls };
+  };
+
+  test("retries once when another fetch holds a ref lock", async () => {
+    const s = scripted([
+      { code: 1, stdout: "", stderr: lockErr },
+      { code: 0, stdout: "ok", stderr: "" },
+    ]);
+    const r = await gitRemote(s.git, "/r", ["fetch", "origin", "dev"], "origin", { retryDelayMs: 0 });
+    expect(r.code).toBe(0);
+    expect(s.calls()).toBe(2);
+  });
+
+  test("does not retry other failures", async () => {
+    const fail = { code: 128, stdout: "", stderr: "Permission denied (publickey)." };
+    const s = scripted([fail, { code: 0, stdout: "ok", stderr: "" }]);
+    expect(await gitRemote(s.git, "/r", ["fetch", "origin", "dev"], "origin", { retryDelayMs: 0 })).toEqual(fail);
+    expect(s.calls()).toBe(1);
+  });
+
+  test("retries at most once", async () => {
+    const second = { code: 1, stdout: "", stderr: `${lockErr} (second)` };
+    const s = scripted([{ code: 1, stdout: "", stderr: lockErr }, second, { code: 0, stdout: "ok", stderr: "" }]);
+    expect(await gitRemote(s.git, "/r", ["fetch", "origin", "dev"], "origin", { retryDelayMs: 0 })).toEqual(second);
+    expect(s.calls()).toBe(2);
+  });
+
+  test("a timeout still throws without a retry", async () => {
+    const s = scripted([{ code: 124, stdout: "", stderr: lockErr, timedOut: true }, { code: 0, stdout: "ok", stderr: "" }]);
+    await expect(gitRemote(s.git, "/r", ["fetch", "origin", "dev"], "origin", { retryDelayMs: 0 })).rejects.toBeInstanceOf(OrchError);
+    expect(s.calls()).toBe(1);
+  });
 });
