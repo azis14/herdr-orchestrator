@@ -190,11 +190,11 @@ describe("showMr --fetch", () => {
     expect(mr.base).toBe("b1");
   });
 
-  test("on GitHub fetches the pull ref and sets base to the merge base", async () => {
+  test("on GitHub fetches the pull ref and the target branch, and sets base to the merge base", async () => {
     const t = setup(GH_ORIGIN, ghHandlers(), (_cwd, args) => (args[0] === "merge-base" ? { stdout: "mergebase1\n" } : {}));
     const mr = await showMr(t.deps, [GH_URL], { fetch: true });
     expect(t.gitCalls.map((c) => c.args)).toEqual([
-      ["fetch", "origin", "refs/pull/9/head"],
+      ["fetch", "origin", "refs/pull/9/head", "dev"],
       ["cat-file", "-e", "ghhead^{commit}"],
       ["merge-base", "ghbase", "ghhead"],
     ]);
@@ -208,6 +208,6 @@ describe("showMr --fetch", () => {
 
   test("fails when head is not reachable", async () => {
     const t = setup(GL_ORIGIN, glHandlers(), (_cwd, args) => (args[0] === "cat-file" ? { code: 1 } : {}));
-    await expect(showMr(t.deps, [GL_URL], { fetch: true })).rejects.toThrow("h1");
+    await expect(showMr(t.deps, [GL_URL], { fetch: true })).rejects.toThrow(/h1.*is not reachable/);
   });
 });
