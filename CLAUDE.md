@@ -30,7 +30,7 @@ bun orch.ts project add <path> --description D [--name N] [--context a,b]
 bun orch.ts project remove <name>     # refused while an unfinished job includes it
 bun orch.ts skills [project] [--resolve <skill>]
 bun orch.ts job new|list|show|stage|log|agent|spawn ...
-bun orch.ts mr show <ref> [--fetch] [--json]          # an MR/PR's metadata, diff and checks; <ref> is its URL, or <project> <id> (bare number)
+bun orch.ts mr show <ref> [--fetch] [--json]          # an MR/PR's metadata (state, fork, branches, head sha); --fetch also fetches its head locally; <ref> is its URL, or <project> <id> (bare number)
 bun orch.ts mr threads <ref> [--json]                 # its review threads, resolved or not
 bun orch.ts mr position <ref> --path P --line N [--old-path O] [--side new|old]   # where an inline comment would land; checks the line is changed
 bun orch.ts mr post <ref> [--dry-run]                 # post a review ({summary, comments} JSON on stdin); exits 3, posting nothing, if a comment is off the diff
