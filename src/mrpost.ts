@@ -1,4 +1,4 @@
-import { diffPosition, type DiffPosition, type Side } from "./diffpos";
+import { diffPosition, fileDiff, positionInDiff, type DiffPosition, type Side } from "./diffpos";
 import { OrchError } from "./errors";
 import { ForgeError, type Forge, type Platform } from "./forge";
 import { encodeRepo, forgeFor, type MrDeps, type MrInfo } from "./mr";
@@ -37,9 +37,31 @@ export interface PostResult {
   summaryUrl: string | null;
 }
 
+/** The `position` of a GitLab discussion. */
+export interface GitlabPosition {
+  position_type: "text";
+  base_sha: string | null;
+  start_sha: string | null;
+  head_sha: string;
+  old_path: string;
+  new_path: string;
+  old_line?: number;
+  new_line?: number;
+}
+
+/** Where a GitHub review thread is anchored. */
+export interface GithubAnchor {
+  path: string;
+  line: number;
+  side: "LEFT" | "RIGHT";
+  startLine?: number;
+  startSide?: "LEFT" | "RIGHT";
+}
+
 export interface DryRun {
   summary: string;
-  comments: { path: string; line: number; position: DiffPosition; body: string }[];
+  /** `payload`: what would anchor the comment on the platform. */
+  comments: { path: string; line: number; position: DiffPosition; body: string; payload: GitlabPosition | GithubAnchor }[];
 }
 
 /** Thrown before anything is posted when some comments can't be placed; the CLI prints them as JSON and exits 3. */
@@ -129,28 +151,34 @@ interface Placed {
   pos: DiffPosition;
 }
 
-function place(deps: MrDeps, mr: MrInfo & { base: string }, c: ReviewComment, line = c.line, side: Side = c.side ?? "new"): Promise<DiffPosition> {
-  return diffPosition(deps.git, mr.projectPath, mr.base, mr.head, { path: c.path, oldPath: c.oldPath, line, side });
-}
+const query = (c: ReviewComment, line = c.line, side: Side = c.side ?? "new") => ({ path: c.path, oldPath: c.oldPath || c.path, line, side });
 
 /** Every comment's position; throws OutsideError (nothing posted) if any line, or any line a suggestion replaces, is outside the diff. */
 async function validate(deps: MrDeps, mr: MrInfo, input: ReviewInput): Promise<Placed[]> {
-  if (!mr.base) throw new OrchError(`no base commit for ${mr.kind} ${mr.number}`);
-  const withBase = mr as MrInfo & { base: string };
+  const base = mr.base;
+  if (!base) throw new OrchError(`no base commit for ${mr.kind} ${mr.number}`);
   for (const c of input.comments) {
     if (c.suggestion && c.side === "old") throw new OrchError(`${c.path}:${c.line}: a suggestion can't go on a removed line (side old)`);
   }
+  // One `git diff` per file; every line (and every line a suggestion replaces) is looked up in it.
+  const diffs = new Map<string, Promise<string>>();
+  const diffOf = (c: ReviewComment) => {
+    const key = JSON.stringify([c.oldPath || c.path, c.path]);
+    if (!diffs.has(key)) diffs.set(key, fileDiff(deps.git, mr.projectPath, base, mr.head, c));
+    return diffs.get(key)!;
+  };
   const placed: Placed[] = [];
   const outside: ReviewComment[] = [];
   for (const c of input.comments) {
-    const pos = await place(deps, withBase, c);
+    const diff = await diffOf(c);
+    const pos = positionInDiff(diff, query(c));
     let fits = pos.kind !== "outside";
     if (fits && c.suggestion) {
       const { above = 0, below = 0 } = c.suggestion;
       if (c.line - above < 1) fits = false;
       for (let l = c.line - above; fits && l <= c.line + below; l++) {
         if (l === c.line) continue;
-        const k = (await place(deps, withBase, c, l, "new")).kind;
+        const k = positionInDiff(diff, query(c, l, "new")).kind;
         fits = k === "added" || k === "context";
       }
     }
@@ -169,19 +197,25 @@ const failure = (c: ReviewComment, error: string): CommentResult => ({ path: c.p
 
 /** Posts the review: one inline thread per comment, then the summary (with any failed comment listed in it). Validates first. */
 export async function postReview(deps: MrDeps, mr: MrInfo, input: ReviewInput, o: { dryRun?: boolean } = {}): Promise<PostResult | DryRun> {
-  checkReviewInput(input);
-  const placed = await validate(deps, mr, input);
+  const review = checkReviewInput(input);
+  const placed = await validate(deps, mr, review);
   if (o.dryRun) {
     return {
-      summary: input.summary,
-      comments: placed.map(({ c, pos }) => ({ path: c.path, line: c.line, position: pos, body: renderBody(mr.platform, c) })),
+      summary: review.summary,
+      comments: placed.map(({ c, pos }) => ({
+        path: c.path,
+        line: c.line,
+        position: pos,
+        body: renderBody(mr.platform, c),
+        payload: mr.platform === "gitlab" ? gitlabPosition(mr, pos) : githubAnchor(c, pos),
+      })),
     };
   }
   const forge = forgeFor(deps, mr);
-  return mr.platform === "gitlab" ? postGitlab(deps, forge, mr, input, placed) : postGithub(forge, mr, input, placed);
+  return mr.platform === "gitlab" ? postGitlab(deps, forge, mr, review, placed) : postGithub(forge, mr, review, placed);
 }
 
-function gitlabPosition(mr: MrInfo, pos: DiffPosition) {
+function gitlabPosition(mr: MrInfo, pos: DiffPosition): GitlabPosition {
   return {
     position_type: "text",
     base_sha: mr.base,
@@ -211,8 +245,8 @@ async function postGitlab(deps: MrDeps, forge: Forge, mr: MrInfo, input: ReviewI
         d = await send(pos);
       } catch (e) {
         if (!rejectedPosition(e)) throw e;
-        // Recheck the position once and retry; a second rejection fails the comment.
-        const again = await place(deps, mr as MrInfo & { base: string }, c);
+        // Recheck the position once (a fresh diff) and retry; a second rejection fails the comment.
+        const again = await diffPosition(deps.git, mr.projectPath, mr.base as string, mr.head, query(c));
         if (again.kind === "outside") throw new OrchError(`${(e as Error).message}\n(rechecked: no longer on a changed line)`);
         d = await send(again);
       }
@@ -238,7 +272,7 @@ async function postGitlab(deps: MrDeps, forge: Forge, mr: MrInfo, input: ReviewI
 }
 
 const ADD_REVIEW = `mutation AddReview($input: AddPullRequestReviewInput!) {
-  addPullRequestReview(input: $input) { pullRequestReview { id } }
+  addPullRequestReview(input: $input) { pullRequestReview { id url } }
 }`;
 
 const ADD_THREAD = `mutation AddThread($input: AddPullRequestReviewThreadInput!) {
@@ -249,29 +283,30 @@ const SUBMIT_REVIEW = `mutation SubmitReview($input: SubmitPullRequestReviewInpu
   submitPullRequestReview(input: $input) { pullRequestReview { id url } }
 }`;
 
-function githubThread(reviewId: string, c: ReviewComment, pos: DiffPosition) {
+/** Where a GitHub thread goes: LEFT only for a removed line; a multi-line suggestion spans startLine..line. */
+function githubAnchor(c: ReviewComment, pos: DiffPosition): GithubAnchor {
   const removed = pos.kind === "removed";
   const side = removed ? "LEFT" : "RIGHT";
   const line = (removed ? pos.oldLine : pos.line) as number;
   const { above = 0, below = 0 } = c.suggestion ?? {};
   return {
-    pullRequestReviewId: reviewId,
     path: pos.path,
     line: line + below,
     side,
-    // A multi-line suggestion replaces startLine..line.
     ...(above + below > 0 ? { startLine: line - above, startSide: side } : {}),
-    body: renderBody("github", c),
   };
 }
 
 async function postGithub(forge: Forge, mr: MrInfo, input: ReviewInput, placed: Placed[]): Promise<PostResult> {
   if (!mr.nodeId) throw new OrchError(`no node id for pr ${mr.number}`);
   let reviewId: string;
+  let reviewUrl: string;
   try {
     const data = await forge.graphql(ADD_REVIEW, { input: { pullRequestId: mr.nodeId, commitOID: mr.head } });
-    reviewId = data?.addPullRequestReview?.pullRequestReview?.id;
-    if (!reviewId) throw new ForgeError("addPullRequestReview returned no review id");
+    const created = data?.addPullRequestReview?.pullRequestReview;
+    if (!created?.id) throw new ForgeError("addPullRequestReview returned no review id");
+    reviewId = created.id;
+    reviewUrl = created.url ?? mr.url;
   } catch (e) {
     if (e instanceof OrchError && /pending review/i.test(e.message)) {
       throw new OrchError(`you already have a pending review on pr ${mr.number} (${e.message}); submit or discard it on ${mr.url}, then post again`);
@@ -279,38 +314,36 @@ async function postGithub(forge: Forge, mr: MrInfo, input: ReviewInput, placed: 
     throw e;
   }
 
+  // From here on a pending review exists: nothing may escape without saying so.
   const results: CommentResult[] = [];
-  const failed: ReviewComment[] = [];
-  for (const { c, pos } of placed) {
-    try {
-      const data = await forge.graphql(ADD_THREAD, { input: githubThread(reviewId, c, pos) });
-      const thread = data?.addPullRequestReviewThread?.thread;
-      if (!thread) throw new ForgeError("GitHub created no thread for this line");
-      const url = thread.comments?.nodes?.[0]?.url;
-      results.push({ path: c.path, line: c.line, status: "placed", ...(url ? { url } : {}) });
-    } catch (e) {
-      if (!(e instanceof OrchError)) throw e;
-      failed.push(c);
-      results.push(failure(c, e.message));
-    }
-  }
-
-  let review: any;
   try {
+    const failed: ReviewComment[] = [];
+    for (const { c, pos } of placed) {
+      try {
+        const data = await forge.graphql(ADD_THREAD, { input: { pullRequestReviewId: reviewId, ...githubAnchor(c, pos), body: renderBody("github", c) } });
+        const thread = data?.addPullRequestReviewThread?.thread;
+        if (!thread) throw new ForgeError("GitHub created no thread for this line");
+        const url = thread.comments?.nodes?.[0]?.url;
+        results.push({ path: c.path, line: c.line, status: "placed", ...(url ? { url } : {}) });
+      } catch (e) {
+        if (!(e instanceof OrchError)) throw e;
+        failed.push(c);
+        results.push(failure(c, e.message));
+      }
+    }
     const data = await forge.graphql(SUBMIT_REVIEW, { input: { pullRequestReviewId: reviewId, event: "COMMENT", body: appendUnposted(input.summary, failed) } });
-    review = data?.submitPullRequestReview?.pullRequestReview;
+    return { comments: results, summaryUrl: data?.submitPullRequestReview?.pullRequestReview?.url ?? null };
   } catch (e) {
-    if (!(e instanceof OrchError)) throw e;
+    const why = e instanceof Error ? e.message : String(e);
     throw new OrchError(
-      `the review on pr ${mr.number} was built but not submitted: ${e.message}\nIt is still pending on ${mr.url}; submit or discard it there.\nComments:\n${describeResults(results)}`,
+      `review ${reviewId} on pr ${mr.number} was not submitted: ${why}\nIt is still pending on ${reviewUrl}; submit or discard it there.\nComments:\n${describeResults(results) || "(none posted)"}`,
     );
   }
-  return { comments: results, summaryUrl: review?.url ?? null };
 }
 
 /** Plain-text output of `orch mr post`. */
 export function formatPost(r: PostResult | DryRun): string {
   if ("summaryUrl" in r) return [describeResults(r.comments), `summary ${r.summaryUrl ?? "(no url)"}`].filter(Boolean).join("\n");
-  const comments = r.comments.map((c) => `--- ${c.path}:${c.line} (${c.position.kind})\n${c.body}`);
+  const comments = r.comments.map((c) => `--- ${c.path}:${c.line} (${c.position.kind}) ${JSON.stringify(c.payload)}\n${c.body}`);
   return [...comments, `--- summary\n${r.summary}`, "(dry run: nothing posted)"].join("\n\n");
 }

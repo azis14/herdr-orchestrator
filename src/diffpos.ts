@@ -69,12 +69,17 @@ export function positionInDiff(diff: string, o: PositionQuery): DiffPosition {
   return at("outside");
 }
 
-/** The position of one line of `base..head`, read from the real diff (`oldPath` first when it differs from `path`). */
-export async function diffPosition(git: GitRunner, cwd: string, base: string, head: string, o: PositionQuery): Promise<DiffPosition> {
+/** The unified diff of one file over `base..head` (`oldPath` first when it differs from `path`), for `positionInDiff`. */
+export async function fileDiff(git: GitRunner, cwd: string, base: string, head: string, o: { path: string; oldPath?: string }): Promise<string> {
   const oldPath = o.oldPath || o.path;
   const paths = oldPath === o.path ? [o.path] : [oldPath, o.path];
   const args = ["diff", "--no-color", "--no-ext-diff", "-M", "-U3", base, head, "--", ...paths];
   const r = await git(cwd, args);
   if (r.code !== 0) throw new OrchError(`git ${args.join(" ")} failed in ${cwd}: ${r.stderr.trim()}`);
-  return positionInDiff(r.stdout, { ...o, oldPath });
+  return r.stdout;
+}
+
+/** The position of one line of `base..head`, read from the real diff. */
+export async function diffPosition(git: GitRunner, cwd: string, base: string, head: string, o: PositionQuery): Promise<DiffPosition> {
+  return positionInDiff(await fileDiff(git, cwd, base, head, o), { ...o, oldPath: o.oldPath || o.path });
 }

@@ -1,7 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { OrchError } from "../src/errors";
 import type { GitRunner } from "../src/git";
 import type { MrDeps, MrInfo } from "../src/mr";
@@ -25,8 +23,17 @@ const DIFF = [
   "",
 ].join("\n");
 
-const git: GitRunner = async (_cwd, args) =>
-  args[0] === "diff" ? { code: 0, stdout: args.includes("src/a.ts") ? DIFF : "", stderr: "" } : { code: 0, stdout: "", stderr: "" };
+let diffCalls = 0;
+const git: GitRunner = async (_cwd, args) => {
+  if (args[0] !== "diff") return { code: 0, stdout: "", stderr: "" };
+  diffCalls++;
+  return { code: 0, stdout: args.includes("src/a.ts") ? DIFF : "", stderr: "" };
+};
+
+// One temp dir and registry for the whole file, removed afterwards.
+const REG = testRegistry(["shop-api"]);
+const PROJECT_PATH = REG.projects[0].path;
+afterAll(() => fs.rmSync(PROJECT_PATH, { recursive: true, force: true }));
 
 function mrInfo(platform: "gitlab" | "github"): MrInfo {
   const gl = platform === "gitlab";
@@ -35,7 +42,7 @@ function mrInfo(platform: "gitlab" | "github"): MrInfo {
     host: gl ? "gitlab.x.io" : "github.com",
     repo: gl ? "g/p" : "acme/shop",
     project: "shop-api",
-    projectPath: fs.mkdtempSync(path.join(os.tmpdir(), "orch-mrpost-")),
+    projectPath: PROJECT_PATH,
     number: gl ? 3 : 9,
     kind: gl ? "mr" : "pr",
     url: gl ? "https://gitlab.x.io/g/p/-/merge_requests/3" : "https://github.com/acme/shop/pull/9",
@@ -58,7 +65,7 @@ function mrInfo(platform: "gitlab" | "github"): MrInfo {
 
 function setup(handlers: Handlers) {
   const forge = fakeForge(handlers);
-  const deps: MrDeps = { reg: testRegistry(["shop-api"]), git, forge };
+  const deps: MrDeps = { reg: REG, git, forge };
   return { deps, forge };
 }
 
@@ -141,7 +148,8 @@ describe("postReview validation", () => {
   test("dry run posts nothing", async () => {
     for (const platform of ["gitlab", "github"] as const) {
       const t = setup(platform === "gitlab" ? glHandlers() : ghHandlers());
-      const r = (await postReview(t.deps, mrInfo(platform), input([{ path: "src/a.ts", line: 12, body: "use x", suggestion: { text: "x" } }]), { dryRun: true })) as DryRun;
+      const c = { path: "src/a.ts", line: 12, body: "use x", suggestion: { text: "x" } };
+      const r = (await postReview(t.deps, mrInfo(platform), input([c]), { dryRun: true })) as DryRun;
       expect(t.forge.calls).toEqual([]);
       expect(r.summary).toBe("## Review\n\n2 findings");
       expect(r.comments).toEqual([
@@ -149,10 +157,37 @@ describe("postReview validation", () => {
           path: "src/a.ts",
           line: 12,
           position: { kind: "added", path: "src/a.ts", oldPath: "src/a.ts", side: "new", line: 12 },
-          body: renderBody(platform, { path: "src/a.ts", line: 12, body: "use x", suggestion: { text: "x" } }),
+          body: renderBody(platform, c),
+          payload:
+            platform === "gitlab"
+              ? { position_type: "text", base_sha: "b", start_sha: "s", head_sha: "h", old_path: "src/a.ts", new_path: "src/a.ts", new_line: 12 }
+              : { path: "src/a.ts", line: 12, side: "RIGHT" },
         },
       ]);
     }
+  });
+
+  test("dry run shows a multi-line suggestion's range", async () => {
+    const t = setup(ghHandlers());
+    const c = { path: "src/a.ts", line: 12, body: "x", suggestion: { text: "a\nb\nc", above: 1, below: 1 } };
+    const r = (await postReview(t.deps, mrInfo("github"), input([c]), { dryRun: true })) as DryRun;
+    expect(r.comments[0].payload).toEqual({ path: "src/a.ts", line: 13, side: "RIGHT", startLine: 11, startSide: "RIGHT" });
+    expect(t.forge.calls).toEqual([]);
+  });
+
+  test("reads each file's diff once, however many lines are checked", async () => {
+    const t = setup(glHandlers());
+    diffCalls = 0;
+    await postReview(
+      t.deps,
+      mrInfo("gitlab"),
+      input([
+        { path: "src/a.ts", line: 12, body: "x", suggestion: { text: "a\nb\nc", above: 1, below: 1 } },
+        { path: "src/a.ts", line: 13, body: "y" },
+      ]),
+      { dryRun: true },
+    );
+    expect(diffCalls).toBe(1);
   });
 });
 
@@ -361,6 +396,23 @@ describe("postReview on GitHub", () => {
     expect(err.message).toContain("pending review");
     expect(err.message).toContain("submit or discard");
     expect(graphqlCalls(t.forge).map((c) => opName(c.query))).toEqual(["AddReview"]);
+  });
+
+  test("GitHub: any error after the review exists says it is still pending", async () => {
+    const t = setup(
+      ghHandlers({
+        "graphql AddReview": () => ({ stdout: { data: { addPullRequestReview: { pullRequestReview: { id: "R1", url: "https://github.com/acme/shop/pull/9#pullrequestreview-1" } } } } }),
+        "graphql AddThread": () => {
+          throw new Error("socket hang up");
+        },
+      }),
+    );
+    const err = await postReview(t.deps, mrInfo("github"), input([{ path: "src/a.ts", line: 12, body: "x" }])).catch((e) => e);
+    expect(err).toBeInstanceOf(OrchError);
+    expect(err.message).toContain("socket hang up");
+    expect(err.message).toContain("review R1");
+    expect(err.message).toContain("still pending on https://github.com/acme/shop/pull/9#pullrequestreview-1");
+    expect(err.message).toContain("submit or discard");
   });
 
   test("GitHub: a failed submit says the review is still pending", async () => {
