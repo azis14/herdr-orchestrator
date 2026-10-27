@@ -64,10 +64,11 @@ One per review. `orch mr post` posts it last (GitLab) or as the review body (Git
 ```
 
 - Counts cover every finding, inline or not.
+- Drop the checks line when the review ran no checks (they're left to CI).
 - Drop the CODEOWNERS line when the repo has no CODEOWNERS file.
 - Drop the "Not on a changed line" heading when there are none. Keep its spelling exactly when present: `orch mr post` adds inline comments that fail to post under that same heading.
 
-No findings: one line, plus the checks line:
+No findings: one line, plus the checks line if checks ran:
 
 ```markdown
 No changes needed — reviewed <N> files at <short head sha>. <One line on what the MR does.>

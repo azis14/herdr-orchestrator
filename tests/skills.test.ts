@@ -120,7 +120,6 @@ describe("skills", () => {
       new Set([
         "Bash(bun orch.ts mr show:*)",
         "Bash(bun orch.ts mr threads:*)",
-        "Bash(bun orch.ts mr position:*)",
         "Bash(bun orch.ts mr post:*)",
         "Bash(bun orch.ts skills:*)",
         "Bash(git -C * show *)",
@@ -133,7 +132,7 @@ describe("skills", () => {
         "Bash(mktemp -d *)",
       ]),
     );
-    expect(settings.permissions.allow.length).toBe(13);
+    expect(settings.permissions.allow.length).toBe(12);
   });
 
   test("settings.json denies the git options that run code or write files", () => {

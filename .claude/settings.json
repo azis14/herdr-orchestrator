@@ -3,7 +3,6 @@
     "allow": [
       "Bash(bun orch.ts mr show:*)",
       "Bash(bun orch.ts mr threads:*)",
-      "Bash(bun orch.ts mr position:*)",
       "Bash(bun orch.ts mr post:*)",
       "Bash(bun orch.ts skills:*)",
       "Bash(git -C * show *)",
