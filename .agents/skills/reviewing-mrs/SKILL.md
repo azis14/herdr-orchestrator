@@ -11,7 +11,7 @@ Every platform call goes through `bun orch.ts mr …`, run from the orchestrator
 
 ## 1. Resolve
 
-`orch mr show <ref> --fetch --json`, with an id passed as a bare number (`!42` or `#7` → `42`, `7`; unquoted, the shell reads `#7` as a comment). Keep `project`, `projectPath`, `url`, `kind`, `number`, `title`, `description`, `state`, `fork`, `base`, `head`.
+`orch mr show <ref> --fetch --json`, with an id passed as a bare number (`!42` or `#7` → `42`, `7`; unquoted, the shell reads `#7` as a comment). Keep `project`, `projectPath`, `url`, `kind`, `number`, `title`, `description`, `state`, `fork`, `base`, `head`. `head` is the head you review: every `position` and `post` call below passes it as `--head <head>`, so nothing lands on lines a later push has shifted.
 
 - `state` isn't `open`, or `base` or `head` is empty → say so and stop.
 - Several projects have this origin → the error names them. Ask which with AskUserQuestion, one option per name (more than 4: 3 per page plus "More…"), never picking for the user, and re-run with `<project> <number>` (the number from the URL).
@@ -96,15 +96,17 @@ Prefer a few real findings to many speculative ones.
 
 ## 6. Write
 
-Each finding as `mr-comments` describes (or the repo's override): the label from `severity`, `title` as the first sentence, then the trigger, result and fix from `body`. Keep the `suggestion` only if it is the whole fix and still exact.
+Each finding as `mr-comments` describes (or the repo's override): the label from `severity`, `title` as the first sentence, then the trigger, result and fix from `body`. Keep the `suggestion` only if it is the whole fix and still exact, and never on a removed line: drop it from every `side: "old"` finding (`orch mr post` refuses one).
 
 ## 7. Place
 
 For each finding:
 
 ```bash
-orch mr position <ref> --path <path> --line <line> [--old-path <oldPath>] [--side old] --json
+orch mr position <ref> --head <head> --path <path> --line <line> [--old-path <oldPath>] [--side old] --json
 ```
+
+Exit 1 with `the <kind> moved: head is now …, reviewed …`: a push landed during the review. Stop, post nothing, and tell the user to run `/mr-review` again on the new head.
 
 Exit 3 (`outside`): the line isn't in the diff. Move the finding to the summary's "Not on a changed line" list with its `path:line`. Move it to a different line only if that line is genuinely the cause.
 
@@ -112,16 +114,18 @@ Exit 3 (`outside`): the line isn't in the diff. Move the finding to the summary'
 
 Write the summary as `mr-comments` describes: counts by severity, check results, owned paths (CODEOWNERS), off-diff findings. No findings → its "No changes needed" form and `"comments": []`.
 
-Just before posting (a dry run too), run `orch mr show <ref> --json` once more. If its `head` differs from the head you reviewed, stop and tell the user the MR moved during the review; post nothing.
-
 Write `{"summary": "…", "comments": [{"path", "oldPath"?, "line", "side", "body", "suggestion"?}]}` to a file in the scratchpad, then:
 
 ```bash
-orch mr post <ref> --json [--dry-run] < <file>
+orch mr post <ref> --head <head> --json [--dry-run] < <file>
 ```
 
+`--head` makes `post` refuse, posting nothing, if the MR moved since you reviewed it (a dry run too).
+
 - **Exit 3:** nothing was posted; it prints `{"outside": [...]}`. For each listed comment whose line `mr position` placed, the suggestion's range is what's outside: drop the suggestion, keep the comment. Move the rest to the summary. Post again.
-- **Other errors:** after any error other than exit 3 from a non-dry-run `mr post`, never run it again; report it as is.
+- **The MR moved** (exit 1, `the <kind> moved: …; nothing was posted`): stop and tell the user to run `/mr-review` again on the new head. Don't post.
+- **Other errors that say `nothing was posted`** (it failed before sending anything: malformed input, a suggestion on a removed line, a leftover pending GitHub review the user must submit or discard first, a fetch or login problem): fix the cause if it is yours (the input), or tell the user what to do and wait for them, then post again.
+- **Any other error** from a non-dry-run `mr post` (something may have been posted): never run it again; report it as is.
 - **Results:** one per comment, `placed`, `unplaced` (posted as a general comment without a line; never re-post it) or `failed` (`orch` already listed it in the summary under "Not on a changed line"), plus `summaryUrl`.
 
 ## 9. Report in chat
