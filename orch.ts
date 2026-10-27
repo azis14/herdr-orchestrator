@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { closeAgents, findDormant, formatAge, formatDormant, parseDuration } from "./src/cleanup";
 import { vscodeRunner, type EditorRunner } from "./src/editor";
 import { OrchError } from "./src/errors";
+import { forgeRunner, type ForgeRunner } from "./src/forge";
 import { resolveFolder } from "./src/folders";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
@@ -34,6 +35,10 @@ export interface Deps {
   /** Cursor's chat root (`~/.cursor/chats`). */
   cursorChats: string;
   children: ChildrenRunner;
+  /** Runs gh / glab. */
+  forge: ForgeRunner;
+  /** Everything piped to this process on stdin. */
+  readStdin: () => Promise<string>;
   /** Where a binary is on PATH, or null. */
   which: (bin: string) => string | null;
   env: Record<string, string | undefined>;
@@ -437,6 +442,8 @@ if (import.meta.main) {
       claudeProjects: path.join(os.homedir(), ".claude", "projects"),
       cursorChats: path.join(os.homedir(), ".cursor", "chats"),
       children: procChildren,
+      forge: forgeRunner,
+      readStdin: () => Bun.stdin.text(),
       which: (bin) => Bun.which(bin),
       env: process.env,
       out: (s) => console.log(s),

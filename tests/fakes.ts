@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Deps } from "../orch";
+import type { ForgeBin, ForgeRunner } from "../src/forge";
 import { Herdr, type Runner } from "../src/herdr";
 import type { Registry } from "../src/registry";
 
@@ -25,6 +26,35 @@ export function fakeRunner(handlers: Record<string, FakeHandler>): FakeRunner {
     const r = h(args);
     return { code: r.code ?? 0, stdout: text(r.stdout), stderr: text(r.stderr) };
   }) as FakeRunner;
+  run.calls = calls;
+  return run;
+}
+
+export interface FakeForge extends ForgeRunner {
+  calls: { bin: ForgeBin; args: string[]; stdin?: string }[];
+}
+
+/**
+ * A ForgeRunner keyed on "<METHOD> <path without query>" for `api` calls and on
+ * "graphql <first word after query/mutation>" for GraphQL; throws on unhandled calls.
+ */
+export function fakeForge(handlers: Record<string, (args: string[], stdin?: string) => FakeReply>): FakeForge {
+  const calls: FakeForge["calls"] = [];
+  const run = (async (bin: ForgeBin, args: string[], stdin?: string) => {
+    calls.push({ bin, args, stdin });
+    let key: string;
+    if (args[1] === "graphql") {
+      const query: string = JSON.parse(stdin ?? "{}").query ?? "";
+      key = `graphql ${query.match(/\b(?:query|mutation)\b\s*\{?\s*(\w+)/)?.[1] ?? ""}`;
+    } else {
+      const m = args.indexOf("--method");
+      key = `${args[m + 1]} ${args[m + 2].split("?")[0]}`;
+    }
+    const h = handlers[key];
+    if (!h) throw new Error(`fakeForge: unhandled call: ${bin} ${args.join(" ")}`);
+    const r = h(args, stdin);
+    return { code: r.code ?? 0, stdout: text(r.stdout), stderr: text(r.stderr) };
+  }) as FakeForge;
   run.calls = calls;
   return run;
 }
@@ -74,6 +104,8 @@ export function testDeps(handlers: Record<string, FakeHandler> = {}, overrides: 
     claudeProjects: fs.mkdtempSync(path.join(os.tmpdir(), "orch-claude-")),
     cursorChats: fs.mkdtempSync(path.join(os.tmpdir(), "orch-cursor-")),
     children: async () => [],
+    forge: fakeForge({}),
+    readStdin: async () => "",
     which: (bin) => `/usr/bin/${bin}`,
     env: { HERDR_ENV: "1" },
     out: (s) => out.push(s),
