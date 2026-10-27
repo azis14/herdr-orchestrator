@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { OrchError } from "../src/errors";
 import type { GitRunner } from "../src/git";
 import type { MrDeps, MrInfo } from "../src/mr";
-import { appendUnposted, OutsideError, postReview, renderBody, type DryRun, type PostResult, type ReviewInput } from "../src/mrpost";
+import { appendUnposted, OutsideError, postNote, postReview, renderBody, replyThread, resolveThread, type DryRun, type PostResult, type ReviewInput } from "../src/mrpost";
 import { fakeForge, testRegistry, type FakeReply } from "./fakes";
 
 type Handlers = Record<string, (args: string[], stdin?: string) => FakeReply>;
@@ -454,5 +454,106 @@ describe("postReview on GitHub", () => {
     expect(err.message).toContain("boom");
     expect(err.message).toContain("pending");
     expect(err.message).toContain("discussion_r1");
+  });
+});
+
+/** Thread listing for notes/replies/resolve: GitLab discussion "d1" is a thread, "g1" a general note. */
+function glThreads(): Handlers {
+  return {
+    [`GET ${GL}/discussions`]: () => ({
+      stdout: [
+        { id: "d1", notes: [{ id: 11, resolvable: true, resolved: false, body: "x", position: { new_path: "a.ts", new_line: 3 } }] },
+        { id: "g1", notes: [{ id: 12, resolvable: false, body: "general" }] },
+      ],
+    }),
+  };
+}
+
+function ghThreads(): Handlers {
+  return {
+    "graphql ReviewThreads": () => ({
+      stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [{ id: "PRT_1", isResolved: false, path: "a.ts", line: 3, diffSide: "RIGHT", comments: { pageInfo: { hasNextPage: false }, nodes: [] } }] } } } } },
+    }),
+    "GET repos/acme/shop/issues/9/comments": () => ({ stdout: [{ id: 5, body: "general", html_url: "u" }] }),
+    "GET repos/acme/shop/pulls/9/reviews": () => ({ stdout: [] }),
+  };
+}
+
+describe("postNote, replyThread, resolveThread on GitLab", () => {
+  test("note posts a general note and returns its url", async () => {
+    const { deps, forge } = setup({ [`POST ${GL}/notes`]: () => ({ stdout: { id: 77 } }) });
+    expect(await postNote(deps, mrInfo("gitlab"), "hello")).toBe("https://gitlab.x.io/g/p/-/merge_requests/3#note_77");
+    expect(stdinOf(forge, `${GL}/notes`)).toEqual([{ body: "hello" }]);
+  });
+
+  test("reply posts into the discussion and returns the note url", async () => {
+    const { deps, forge } = setup({ ...glThreads(), [`POST ${GL}/discussions/d1/notes`]: () => ({ stdout: { id: 78 } }) });
+    expect(await replyThread(deps, mrInfo("gitlab"), "d1", "fixed")).toBe("https://gitlab.x.io/g/p/-/merge_requests/3#note_78");
+    expect(stdinOf(forge, `${GL}/discussions/d1/notes`)).toEqual([{ body: "fixed" }]);
+  });
+
+  test("resolve PUTs resolved=true and returns the state", async () => {
+    const { deps, forge } = setup({ ...glThreads(), [`PUT ${GL}/discussions/d1`]: () => ({ stdout: { id: "d1", notes: [{ id: 11, resolved: true }] } }) });
+    expect(await resolveThread(deps, mrInfo("gitlab"), "d1")).toBe(true);
+    const put = forge.calls.find((c) => c.args.includes("PUT"))!;
+    expect(put.args).toContain(`${GL}/discussions/d1?resolved=true`);
+  });
+
+  test("refuses to resolve or reply to something that isn't a thread", async () => {
+    const { deps, forge } = setup(glThreads());
+    const mr = mrInfo("gitlab");
+    await expect(resolveThread(deps, mr, "g1")).rejects.toThrow("g1 is not a review thread on mr 3");
+    await expect(replyThread(deps, mr, "nope", "x")).rejects.toThrow("nope is not a review thread on mr 3");
+    expect(posts(forge)).toEqual([]);
+  });
+
+  test("refuses an empty body", async () => {
+    const { deps, forge } = setup(glThreads());
+    const mr = mrInfo("gitlab");
+    await expect(postNote(deps, mr, "  \n")).rejects.toThrow(OrchError);
+    await expect(replyThread(deps, mr, "d1", "")).rejects.toThrow(OrchError);
+    expect(forge.calls).toEqual([]);
+  });
+});
+
+describe("postNote, replyThread, resolveThread on GitHub", () => {
+  test("note posts an issue comment and returns its url", async () => {
+    const { deps, forge } = setup({ "POST repos/acme/shop/issues/9/comments": () => ({ stdout: { id: 5, html_url: "https://github.com/acme/shop/pull/9#issuecomment-5" } }) });
+    expect(await postNote(deps, mrInfo("github"), "hello")).toBe("https://github.com/acme/shop/pull/9#issuecomment-5");
+    expect(stdinOf(forge, "repos/acme/shop/issues/9/comments")).toEqual([{ body: "hello" }]);
+  });
+
+  test("reply adds a thread reply and returns the comment url", async () => {
+    const { deps, forge } = setup({
+      ...ghThreads(),
+      "graphql ReplyThread": () => ({ stdout: { data: { addPullRequestReviewThreadReply: { comment: { url: "https://github.com/acme/shop/pull/9#discussion_r2" } } } } }),
+    });
+    expect(await replyThread(deps, mrInfo("github"), "PRT_1", "fixed")).toBe("https://github.com/acme/shop/pull/9#discussion_r2");
+    const [call] = graphqlCalls(forge).filter((c) => opName(c.query) === "ReplyThread");
+    expect(call.variables.input).toEqual({ pullRequestReviewThreadId: "PRT_1", body: "fixed" });
+  });
+
+  test("resolve resolves the thread and returns the state", async () => {
+    const { deps, forge } = setup({
+      ...ghThreads(),
+      "graphql ResolveThread": () => ({ stdout: { data: { resolveReviewThread: { thread: { id: "PRT_1", isResolved: true } } } } }),
+    });
+    expect(await resolveThread(deps, mrInfo("github"), "PRT_1")).toBe(true);
+    const [call] = graphqlCalls(forge).filter((c) => opName(c.query) === "ResolveThread");
+    expect(call.variables.input).toEqual({ threadId: "PRT_1" });
+  });
+
+  test("refuses to resolve or reply to something that isn't a thread", async () => {
+    const { deps, forge } = setup(ghThreads());
+    const mr = mrInfo("github");
+    await expect(resolveThread(deps, mr, "5")).rejects.toThrow("5 is not a review thread on pr 9");
+    await expect(replyThread(deps, mr, "PRT_x", "x")).rejects.toThrow("PRT_x is not a review thread on pr 9");
+    expect(graphqlCalls(forge).filter((c) => opName(c.query))).toEqual([]); // no mutation, only thread listings
+  });
+
+  test("refuses an empty body", async () => {
+    const { deps, forge } = setup(ghThreads());
+    await expect(postNote(deps, mrInfo("github"), "")).rejects.toThrow(OrchError);
+    expect(forge.calls).toEqual([]);
   });
 });

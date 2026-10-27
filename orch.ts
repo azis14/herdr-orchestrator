@@ -14,7 +14,7 @@ import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAge
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
 import { diffPosition, type Side } from "./src/diffpos";
 import { listThreads, showMr } from "./src/mr";
-import { formatPost, OutsideError, parseReviewInput, postReview } from "./src/mrpost";
+import { checkBody, formatPost, OutsideError, parseReviewInput, postNote, postReview, replyThread, resolveThread } from "./src/mrpost";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
@@ -84,7 +84,12 @@ const USAGE = `usage: bun orch.ts <command>
   mr post <ref> [--dry-run] [--json]
                                  post a review ({summary, comments} JSON on stdin); exits 3, posting nothing,
                                  if a comment is not on a changed line
-  mr note|reply|resolve|worktree ...
+  mr note <ref> [--json]         post a general note (body on stdin); prints its url
+  mr reply <ref> --thread ID [--json]
+                                 reply in a review thread (body on stdin); prints the reply's url
+  mr resolve <ref> --thread ID [--json]
+                                 resolve a review thread; prints "resolved: true"
+  mr worktree ...
                                  review and fix a GitLab MR / GitHub PR; <ref> is its URL, or <project> <id> (id 42, !42 or #42)`;
 
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
@@ -495,6 +500,26 @@ const commands: Record<string, Command> = {
           return 3;
         }
         deps.out(values.json ? JSON.stringify(r, null, 2) : formatPost(r));
+        return 0;
+      }
+      case "note":
+      case "reply":
+      case "resolve": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { thread: { type: "string" }, json: { type: "boolean" } },
+        });
+        if (sub !== "note" && !values.thread) throw new OrchError(`mr ${sub} needs --thread ID (see \`mr threads\`)`);
+        const body = sub === "resolve" ? "" : checkBody(await deps.readStdin());
+        const mr = await showMr(deps, positionals);
+        if (sub === "resolve") {
+          const resolved = await resolveThread(deps, mr, values.thread!);
+          deps.out(values.json ? JSON.stringify({ resolved }) : `resolved: ${resolved}`);
+        } else {
+          const url = sub === "note" ? await postNote(deps, mr, body) : await replyThread(deps, mr, values.thread!, body);
+          deps.out(values.json ? JSON.stringify({ url }) : url);
+        }
         return 0;
       }
       default:

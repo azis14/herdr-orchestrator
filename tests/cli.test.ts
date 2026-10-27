@@ -608,6 +608,48 @@ describe("cli mr", () => {
     expect(bad.posted()).toBe(false);
   });
 
+  test("mr note, reply and resolve print the url or resolved state", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) =>
+      args.join(" ") === "remote get-url origin" && cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+    const mk = (stdin: string) => {
+      const forge = fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h" } },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+        "GET projects/g%2Fp/merge_requests/3/discussions": () => ({ stdout: [{ id: "d1", notes: [{ id: 1, resolvable: true, resolved: false, position: { new_path: "a.ts", new_line: 1 } }] }] }),
+        "POST projects/g%2Fp/merge_requests/3/notes": () => ({ stdout: { id: 6 } }),
+        "POST projects/g%2Fp/merge_requests/3/discussions/d1/notes": () => ({ stdout: { id: 7 } }),
+        "PUT projects/g%2Fp/merge_requests/3/discussions/d1": () => ({ stdout: { id: "d1", notes: [{ id: 1, resolved: true }] } }),
+      });
+      return { ...testDeps({}, { reg, git, forge, readStdin: async () => stdin }), forge };
+    };
+    const U = "https://gitlab.x.io/g/p/-/merge_requests/3";
+
+    const note = mk("hi");
+    expect(await main(["mr", "note", "shop-api", "3"], note.deps)).toBe(0);
+    expect(note.out).toEqual([`${U}#note_6`]);
+
+    const reply = mk("done");
+    expect(await main(["mr", "reply", "shop-api", "3", "--thread", "d1", "--json"], reply.deps)).toBe(0);
+    expect(JSON.parse(reply.out.join(""))).toEqual({ url: `${U}#note_7` });
+
+    const resolve = mk("");
+    expect(await main(["mr", "resolve", "shop-api", "3", "--thread", "d1"], resolve.deps)).toBe(0);
+    expect(resolve.out).toEqual(["resolved: true"]);
+
+    const noThread = mk("x");
+    expect(await main(["mr", "reply", "shop-api", "3"], noThread.deps)).toBe(1);
+    expect(noThread.err.join("\n")).toContain("--thread");
+
+    const empty = mk("  ");
+    expect(await main(["mr", "note", "shop-api", "3"], empty.deps)).toBe(1);
+    expect(empty.err.join("\n")).toContain("empty");
+    expect(empty.forge.calls).toEqual([]);
+  });
+
   test("mr with no subcommand prints mr usage", async () => {
     const { deps, err } = testDeps();
     expect(await main(["mr"], deps)).toBe(1);

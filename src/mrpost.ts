@@ -1,7 +1,7 @@
 import { diffPosition, fileDiff, positionInDiff, type DiffPosition, type Side } from "./diffpos";
 import { OrchError } from "./errors";
 import { ForgeError, type Forge, type Platform } from "./forge";
-import { encodeRepo, forgeFor, type MrDeps, type MrInfo } from "./mr";
+import { encodeRepo, forgeFor, listThreads, type MrDeps, type MrInfo } from "./mr";
 
 /** Replacement lines: the commented line plus `above` lines before it and `below` after it. */
 export interface Suggestion {
@@ -351,6 +351,66 @@ async function postGithub(forge: Forge, mr: MrInfo, input: ReviewInput, placed: 
     }
     throw new OrchError(lines.join("\n"));
   }
+}
+
+/** `body` as is, or an OrchError if it is blank. */
+export function checkBody(body: string): string {
+  if (!body.trim()) throw new OrchError("the body is empty; pipe the text on stdin");
+  return body;
+}
+
+const mrApi = (mr: MrInfo) => `projects/${encodeRepo(mr.repo)}/merge_requests/${mr.number}`;
+const gitlabNoteUrl = (mr: MrInfo, note: any) => (note?.id != null ? `${mr.url}#note_${note.id}` : mr.url);
+
+/** Refuses an id that isn't a review thread of this MR (a general note, or another MR's thread). */
+async function requireThread(deps: MrDeps, mr: MrInfo, threadId: string): Promise<void> {
+  const { threads } = await listThreads(deps, mr);
+  if (!threads.some((t) => t.id === threadId)) throw new OrchError(`${threadId} is not a review thread on ${mr.kind} ${mr.number}`);
+}
+
+/** Posts a general note (comment) on the MR/PR; returns its url. */
+export async function postNote(deps: MrDeps, mr: MrInfo, body: string): Promise<string> {
+  checkBody(body);
+  const forge = forgeFor(deps, mr);
+  if (mr.platform === "gitlab") {
+    const note: any = await forge.rest("POST", `${mrApi(mr)}/notes`, { body });
+    return gitlabNoteUrl(mr, note);
+  }
+  const comment: any = await forge.rest("POST", `repos/${mr.repo}/issues/${mr.number}/comments`, { body });
+  return comment?.html_url ?? mr.url;
+}
+
+const REPLY_THREAD = `mutation ReplyThread($input: AddPullRequestReviewThreadReplyInput!) {
+  addPullRequestReviewThreadReply(input: $input) { comment { id url } }
+}`;
+
+const RESOLVE_THREAD = `mutation ResolveThread($input: ResolveReviewThreadInput!) {
+  resolveReviewThread(input: $input) { thread { id isResolved } }
+}`;
+
+/** Replies in an existing review thread; returns the reply's url. */
+export async function replyThread(deps: MrDeps, mr: MrInfo, threadId: string, body: string): Promise<string> {
+  checkBody(body);
+  await requireThread(deps, mr, threadId);
+  const forge = forgeFor(deps, mr);
+  if (mr.platform === "gitlab") {
+    const note: any = await forge.rest("POST", `${mrApi(mr)}/discussions/${encodeURIComponent(threadId)}/notes`, { body });
+    return gitlabNoteUrl(mr, note);
+  }
+  const data = await forge.graphql(REPLY_THREAD, { input: { pullRequestReviewThreadId: threadId, body } });
+  return data?.addPullRequestReviewThreadReply?.comment?.url ?? mr.url;
+}
+
+/** Resolves a review thread (only the one asked for); returns the thread's resolved state. */
+export async function resolveThread(deps: MrDeps, mr: MrInfo, threadId: string): Promise<boolean> {
+  await requireThread(deps, mr, threadId);
+  const forge = forgeFor(deps, mr);
+  if (mr.platform === "gitlab") {
+    const d: any = await forge.rest("PUT", `${mrApi(mr)}/discussions/${encodeURIComponent(threadId)}?resolved=true`);
+    return !!d?.notes?.[0]?.resolved;
+  }
+  const data = await forge.graphql(RESOLVE_THREAD, { input: { threadId } });
+  return !!data?.resolveReviewThread?.thread?.isResolved;
 }
 
 /** Plain-text output of `orch mr post`. */
