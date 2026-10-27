@@ -184,20 +184,50 @@ describe("showMr", () => {
 });
 
 describe("showMr --fetch", () => {
-  test("fetches the head ref and the target branch", async () => {
-    const t = setup(GL_ORIGIN, glHandlers());
+  /** A repo that has `local` commits, and every commit once something is fetched. */
+  const repo = (local: string[], extra: (args: string[]) => GitReply = () => ({})) => {
+    let fetched = false;
+    return (_cwd: string, args: string[]): GitReply => {
+      if (args[0] === "fetch") fetched = true;
+      if (args[0] === "cat-file") return fetched || local.some((sha) => args[2] === `${sha}^{commit}`) ? {} : { code: 1 };
+      return extra(args);
+    };
+  };
+
+  test("fetches the head ref and the target branch when the head isn't local", async () => {
+    const t = setup(GL_ORIGIN, glHandlers(), repo([]));
     const mr = await showMr(t.deps, [GL_URL], { fetch: true });
     expect(t.gitCalls).toEqual([
+      { cwd: t.project.path, args: ["cat-file", "-e", "h1^{commit}"] },
       { cwd: t.project.path, args: ["fetch", "origin", "refs/merge-requests/42/head", "dev"] },
       { cwd: t.project.path, args: ["cat-file", "-e", "h1^{commit}"] },
     ]);
     expect(mr.base).toBe("b1");
   });
 
+  test("fetches when the head is local but the base isn't", async () => {
+    const t = setup(GL_ORIGIN, glHandlers(), repo(["h1"]));
+    await showMr(t.deps, [GL_URL], { fetch: true });
+    expect(t.gitCalls.map((c) => c.args[0])).toEqual(["cat-file", "cat-file", "fetch", "cat-file"]);
+  });
+
+  test("skips the fetch when the head and base are already local", async () => {
+    const t = setup(GL_ORIGIN, glHandlers(), repo(["h1", "b1"]));
+    const mr = await showMr(t.deps, [GL_URL], { fetch: true });
+    expect(t.gitCalls.map((c) => c.args)).toEqual([
+      ["cat-file", "-e", "h1^{commit}"],
+      ["cat-file", "-e", "b1^{commit}"],
+    ]);
+    expect(mr.base).toBe("b1");
+  });
+
   test("on GitHub fetches the pull ref and the target branch, and sets base to the merge base", async () => {
-    const t = setup(GH_ORIGIN, ghHandlers(), (_cwd, args) => (args[0] === "merge-base" ? { stdout: "mergebase1\n" } : {}));
+    const mergeBase = (args: string[]): GitReply => (args[0] === "merge-base" ? { stdout: "mergebase1\n" } : {});
+    const t = setup(GH_ORIGIN, ghHandlers(), repo(["ghhead"], mergeBase));
     const mr = await showMr(t.deps, [GH_URL], { fetch: true });
     expect(t.gitCalls.map((c) => c.args)).toEqual([
+      ["cat-file", "-e", "ghhead^{commit}"],
+      ["cat-file", "-e", "ghbase^{commit}"],
       ["fetch", "origin", "refs/pull/9/head", "dev"],
       ["cat-file", "-e", "ghhead^{commit}"],
       ["merge-base", "ghbase", "ghhead"],
@@ -205,8 +235,22 @@ describe("showMr --fetch", () => {
     expect(mr.base).toBe("mergebase1");
   });
 
+  test("on GitHub skips the fetch when the head and the base branch tip are local, and still computes the merge base", async () => {
+    const mergeBase = (args: string[]): GitReply => (args[0] === "merge-base" ? { stdout: "mergebase1\n" } : {});
+    const t = setup(GH_ORIGIN, ghHandlers(), repo(["ghhead", "ghbase"], mergeBase));
+    const mr = await showMr(t.deps, [GH_URL], { fetch: true });
+    expect(t.gitCalls.map((c) => c.args)).toEqual([
+      ["cat-file", "-e", "ghhead^{commit}"],
+      ["cat-file", "-e", "ghbase^{commit}"],
+      ["merge-base", "ghbase", "ghhead"],
+    ]);
+    expect(mr.base).toBe("mergebase1");
+  });
+
   test("fails when the fetch fails", async () => {
-    const t = setup(GL_ORIGIN, glHandlers(), (_cwd, args) => (args[0] === "fetch" ? { code: 128, stderr: "fatal: no remote" } : {}));
+    const t = setup(GL_ORIGIN, glHandlers(), (_cwd, args) =>
+      args[0] === "fetch" ? { code: 128, stderr: "fatal: no remote" } : args[0] === "cat-file" ? { code: 1 } : {},
+    );
     await expect(showMr(t.deps, [GL_URL], { fetch: true })).rejects.toThrow("fatal: no remote");
   });
 

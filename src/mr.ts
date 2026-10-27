@@ -41,7 +41,10 @@ export function forgeFor(deps: MrDeps, mr: { platform: Platform; host: string })
 
 const GITLAB_STATES: Record<string, MrInfo["state"]> = { opened: "open", merged: "merged", closed: "closed", locked: "closed" };
 
-/** The MR/PR behind `args` (a URL, or `<project> <id>`), normalized across GitLab and GitHub. */
+/**
+ * The MR/PR behind `args` (a URL, or `<project> <id>`), normalized across GitLab and GitHub. With `fetch`, its head
+ * and base commits are made local (fetched from origin only if missing) and GitHub's `base` is set to the merge base.
+ */
 export async function showMr(deps: MrDeps, args: string[], o: { fetch?: boolean } = {}): Promise<MrInfo> {
   const ref = await resolveRef(deps.reg, deps.git, args);
   const forge = forgeFor(deps, ref);
@@ -102,13 +105,19 @@ export async function showMr(deps: MrDeps, args: string[], o: { fetch?: boolean 
   }
 
   if (o.fetch) {
-    const headRef = gitlab ? `refs/merge-requests/${info.number}/head` : `refs/pull/${info.number}/head`;
-    const fetchArgs = ["fetch", "origin", headRef, info.targetBranch];
-    const f = await gitRemote(deps.git, info.projectPath, fetchArgs, "origin");
-    if (f.code !== 0) throw new OrchError(`git ${fetchArgs.join(" ")} failed in ${info.projectPath}: ${f.stderr.trim()}`);
-    const c = await deps.git(info.projectPath, ["cat-file", "-e", `${info.head}^{commit}`]);
-    if (c.code !== 0) {
-      throw new OrchError(`head ${info.head} of ${info.kind} ${info.number} is not reachable after fetching it in ${info.projectPath}`);
+    const has = async (sha: string) => (await deps.git(info.projectPath, ["cat-file", "-e", `${sha}^{commit}`])).code === 0;
+    // The head, and the base the diff is taken from (GitLab's diff base, GitHub's target branch tip).
+    const needed = [info.head, gitlab ? info.base : baseSha].filter((sha): sha is string => !!sha);
+    let local = true;
+    for (const sha of needed) if (!(local = await has(sha))) break;
+    if (!local) {
+      const headRef = gitlab ? `refs/merge-requests/${info.number}/head` : `refs/pull/${info.number}/head`;
+      const fetchArgs = ["fetch", "origin", headRef, info.targetBranch];
+      const f = await gitRemote(deps.git, info.projectPath, fetchArgs, "origin");
+      if (f.code !== 0) throw new OrchError(`git ${fetchArgs.join(" ")} failed in ${info.projectPath}: ${f.stderr.trim()}`);
+      if (!(await has(info.head))) {
+        throw new OrchError(`head ${info.head} of ${info.kind} ${info.number} is not reachable after fetching it in ${info.projectPath}`);
+      }
     }
     if (baseSha) {
       const m = await deps.git(info.projectPath, ["merge-base", baseSha, info.head]);
