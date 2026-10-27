@@ -120,3 +120,121 @@ export async function showMr(deps: MrDeps, args: string[], o: { fetch?: boolean 
   }
   return info;
 }
+
+export interface MrNote {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: string;
+  system: boolean;
+  url: string;
+}
+
+export interface MrThread {
+  id: string;
+  resolvable: boolean;
+  resolved: boolean;
+  outdated: boolean;
+  path: string | null;
+  line: number | null;
+  side: "new" | "old" | null;
+  notes: MrNote[];
+}
+
+export interface MrThreads {
+  me: string;
+  threads: MrThread[];
+  notes: MrNote[];
+}
+
+const REVIEW_THREADS_QUERY = `query ReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id isResolved isOutdated path line originalLine diffSide
+          comments(first: 100) { nodes { id body createdAt url author { login } } }
+        }
+      }
+    }
+  }
+}`;
+
+/** The MR/PR's review threads (resolvable, anchored discussions) and its other comments, normalized across GitLab and GitHub. */
+export async function listThreads(deps: MrDeps, mr: MrInfo): Promise<MrThreads> {
+  const forge = forgeFor(deps, mr);
+  const threads: MrThread[] = [];
+  const notes: MrNote[] = [];
+
+  if (mr.platform === "gitlab") {
+    const discussions: any[] = await forge.rest("GET", `projects/${encodeRepo(mr.repo)}/merge_requests/${mr.number}/discussions`, undefined, { paginate: true });
+    const toNote = (n: any): MrNote => ({
+      id: String(n.id),
+      author: n.author?.username ?? "",
+      body: n.body ?? "",
+      createdAt: n.created_at ?? "",
+      system: !!n.system,
+      url: `${mr.url}#note_${n.id}`,
+    });
+    for (const d of discussions) {
+      const all: any[] = d.notes ?? [];
+      const real = all.filter((n) => !n.system).map(toNote);
+      const first = all[0];
+      if (first?.resolvable) {
+        const pos = first.position;
+        const side = pos?.new_line != null ? "new" : pos?.old_line != null ? "old" : null;
+        threads.push({
+          id: String(d.id),
+          resolvable: true,
+          resolved: !!first.resolved,
+          outdated: false,
+          path: pos?.new_path ?? pos?.old_path ?? null,
+          line: side === "new" ? pos.new_line : side === "old" ? pos.old_line : null,
+          side,
+          notes: real,
+        });
+      } else {
+        notes.push(...real);
+      }
+    }
+  } else {
+    const [owner, name] = mr.repo.split("/");
+    let cursor: string | null = null;
+    for (;;) {
+      const data: any = await forge.graphql(REVIEW_THREADS_QUERY, { owner, name, number: mr.number, cursor });
+      const page = data?.repository?.pullRequest?.reviewThreads;
+      for (const t of page?.nodes ?? []) {
+        threads.push({
+          id: t.id,
+          resolvable: true,
+          resolved: !!t.isResolved,
+          outdated: !!t.isOutdated,
+          path: t.path ?? null,
+          line: t.line ?? t.originalLine ?? null,
+          side: t.diffSide === "LEFT" ? "old" : t.diffSide === "RIGHT" ? "new" : null,
+          notes: (t.comments?.nodes ?? []).map((c: any): MrNote => ({
+            id: String(c.id),
+            author: c.author?.login ?? "",
+            body: c.body ?? "",
+            createdAt: c.createdAt ?? "",
+            system: false,
+            url: c.url ?? "",
+          })),
+        });
+      }
+      if (!page?.pageInfo?.hasNextPage || !page.pageInfo.endCursor) break;
+      cursor = page.pageInfo.endCursor;
+    }
+    const comments: any[] = await forge.rest("GET", `repos/${mr.repo}/issues/${mr.number}/comments`, undefined, { paginate: true });
+    for (const c of comments) {
+      notes.push({ id: String(c.id), author: c.user?.login ?? "", body: c.body ?? "", createdAt: c.created_at ?? "", system: false, url: c.html_url ?? "" });
+    }
+    const reviews: any[] = await forge.rest("GET", `repos/${mr.repo}/pulls/${mr.number}/reviews`, undefined, { paginate: true });
+    for (const r of reviews) {
+      if (!r.body?.trim()) continue;
+      notes.push({ id: String(r.id), author: r.user?.login ?? "", body: r.body, createdAt: r.submitted_at ?? "", system: false, url: r.html_url ?? "" });
+    }
+  }
+  return { me: mr.me, threads, notes };
+}

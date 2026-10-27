@@ -12,7 +12,7 @@ import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
-import { showMr } from "./src/mr";
+import { listThreads, showMr } from "./src/mr";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
@@ -77,7 +77,8 @@ const USAGE = `usage: bun orch.ts <command>
   job agent <id> <agentName> key=value...   (status, designPath, planPath, branch, worktreePath)
   job spawn <id> <project> [agent] [--repo-worktree] [--trust]
   mr show <ref> [--fetch] [--json]
-  mr threads|position|post|note|reply|resolve|worktree ...
+  mr threads <ref> [--json]
+  mr position|post|note|reply|resolve|worktree ...
                                  review and fix a GitLab MR / GitHub PR; <ref> is its URL, or <project> <id> (id 42, !42 or #42)`;
 
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
@@ -422,6 +423,18 @@ const commands: Record<string, Command> = {
         });
         const mr = await showMr(deps, positionals, { fetch: values.fetch });
         deps.out(values.json ? JSON.stringify(mr, null, 2) : `${mr.kind} ${mr.number} ${mr.state} ${mr.sourceBranch} → ${mr.targetBranch} ${mr.url}`);
+        return 0;
+      }
+      case "threads": {
+        const { positionals, values } = parseArgs({ args: rest, allowPositionals: true, options: { json: { type: "boolean" } } });
+        const mr = await showMr(deps, positionals);
+        const r = await listThreads(deps, mr);
+        if (values.json) {
+          deps.out(JSON.stringify(r, null, 2));
+        } else {
+          const open = r.threads.filter((t) => t.resolvable && !t.resolved).length;
+          deps.out(`${mr.kind} ${mr.number}: ${r.threads.length} threads (${open} unresolved), ${r.notes.length} notes`);
+        }
         return 0;
       }
       default:

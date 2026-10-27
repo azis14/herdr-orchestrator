@@ -490,6 +490,37 @@ describe("cli mr", () => {
     expect(t.out).toEqual(["mr 3 open feat → dev https://gitlab.x.io/g/p/-/merge_requests/3"]);
   });
 
+  test("mr threads prints a count line, and --json prints the threads", async () => {
+    const reg = testRegistry();
+    const mk = () =>
+      testDeps({}, {
+        reg,
+        git: originFor(reg, "git@gitlab.x.io:g/p.git"),
+        forge: fakeForge({
+          "GET projects/g%2Fp/merge_requests/3": () => ({
+            stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h" },
+          }),
+          "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+          "GET user": () => ({ stdout: { username: "me" } }),
+          "GET projects/g%2Fp/merge_requests/3/discussions": () => ({
+            stdout: [
+              { id: "d1", notes: [{ id: 1, body: "x", author: { username: "a" }, created_at: "t", system: false, resolvable: true, resolved: false }] },
+              { id: "d2", notes: [{ id: 2, body: "y", author: { username: "a" }, created_at: "t", system: false, resolvable: false }] },
+            ],
+          }),
+        }),
+      });
+    const plain = mk();
+    expect(await main(["mr", "threads", "shop-api", "3"], plain.deps)).toBe(0);
+    expect(plain.out).toEqual(["mr 3: 1 threads (1 unresolved), 1 notes"]);
+    const json = mk();
+    expect(await main(["mr", "threads", "shop-api", "3", "--json"], json.deps)).toBe(0);
+    const r = JSON.parse(json.out[0]);
+    expect(r.me).toBe("me");
+    expect(r.threads[0].id).toBe("d1");
+    expect(r.notes[0].id).toBe("2");
+  });
+
   test("mr with no subcommand prints mr usage", async () => {
     const { deps, err } = testDeps();
     expect(await main(["mr"], deps)).toBe(1);
