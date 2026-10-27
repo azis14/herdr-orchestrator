@@ -14,6 +14,12 @@
       "Bash(git -C * worktree add --detach */mr-*/wt *)",
       "Bash(git -C * worktree remove --force */mr-*/wt)",
       "Bash(mktemp -d *)"
+    ],
+    "deny": [
+      "Bash(git -C * -c *)",
+      "Bash(git -C * --config-env*)",
+      "Bash(git -C * --output*)",
+      "Bash(git -C * --ext-diff*)"
     ]
   }
 }

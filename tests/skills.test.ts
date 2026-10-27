@@ -135,4 +135,17 @@ describe("skills", () => {
     );
     expect(settings.permissions.allow.length).toBe(13);
   });
+
+  test("settings.json denies the git options that run code or write files", () => {
+    const settings = JSON.parse(fs.readFileSync(path.join(ORCH_ROOT, ".claude/settings.json"), "utf8"));
+    expect(new Set(settings.permissions.deny)).toEqual(
+      new Set([
+        "Bash(git -C * -c *)",
+        "Bash(git -C * --config-env*)",
+        "Bash(git -C * --output*)",
+        "Bash(git -C * --ext-diff*)",
+      ]),
+    );
+    expect(settings.permissions.deny.length).toBe(4);
+  });
 });
