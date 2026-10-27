@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fakeForge } from "./fakes";
-import { Forge, ForgeError, parseJsonStream, type ForgeRunner } from "../src/forge";
+import { Forge, forgeRunner, ForgeError, parseJsonStream, type ForgeRunner } from "../src/forge";
 
 const HOST = "gitlab.acclime.cloud";
 
@@ -72,6 +72,32 @@ describe("Forge", () => {
     expect(e2.message.endsWith("! gh auth login")).toBe(true);
   });
 
+  test("failure includes the response body from stdout", async () => {
+    const g = stub({ code: 1, stderr: "glab: 409 Conflict", stdout: '{"message":"Branch already exists"}' });
+    const e = await new Forge(g.run, "gitlab", HOST).rest("POST", "x", {}).catch((e) => e);
+    expect(e.status).toBe(409);
+    expect(e.message).toContain("glab: 409 Conflict");
+    expect(e.message).toContain('{"message":"Branch already exists"}');
+  });
+
+  test("an empty paginated response is an empty list", async () => {
+    const s = stub({ stdout: "" });
+    expect(await new Forge(s.run, "gitlab", HOST).rest("GET", "x", undefined, { paginate: true })).toEqual([]);
+    expect(await new Forge(s.run, "gitlab", HOST).rest("GET", "x")).toBeNull();
+  });
+
+  test("a missing binary says it is not installed", async () => {
+    const saved = process.env.PATH;
+    process.env.PATH = "/nonexistent-orch-test-dir";
+    try {
+      const e = await forgeRunner("glab", ["--version"]).catch((e) => e);
+      expect(e).toBeInstanceOf(ForgeError);
+      expect(e.message).toBe("glab is not installed (needed for /mr-review and /mr-fix)");
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+
   test("graphql sends query and variables on stdin and returns data", async () => {
     const s = stub({ stdout: '{"data":{"x":1}}' });
     const r = await new Forge(s.run, "github", "github.com").graphql("query Q { x }", { a: 1 });
@@ -105,7 +131,7 @@ describe("fakeForge", () => {
     expect(await gl.rest("GET", "projects/a%2Fb/merge_requests/42?per_page=100")).toEqual({ iid: 42 });
     const gh = new Forge(f, "github", "github.com");
     expect(await gh.graphql("mutation addPullRequestReview($id: ID!) { x }", { id: "1" })).toEqual({ got: { id: "1" } });
-    expect(await gh.graphql("mutation { addPullRequestReview(input: {}) { x } }", {}).catch((e) => e)).toBeDefined();
+    expect(await gh.graphql("mutation { addPullRequestReview(input: {}) { x } }", {})).toEqual({ got: {} });
     await expect(gl.rest("GET", "nope")).rejects.toThrow("fakeForge: unhandled call");
   });
 });

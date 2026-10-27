@@ -10,18 +10,28 @@ export type ForgeRunner = (
 
 /** Runs gh/glab. Request bodies go on stdin, never as a file path. */
 export const forgeRunner: ForgeRunner = async (bin, args, stdin) => {
-  const proc = Bun.spawn([bin, ...args], {
-    stdin: stdin === undefined ? "ignore" : "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn([bin, ...args], {
+      env: process.env,
+      stdin: stdin === undefined ? "ignore" : "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (e) {
+    if ((e as { code?: string })?.code === "ENOENT") {
+      throw new ForgeError(`${bin} is not installed (needed for /mr-review and /mr-fix)`);
+    }
+    throw e;
+  }
   if (stdin !== undefined) {
-    proc.stdin!.write(stdin);
-    await proc.stdin!.end();
+    const sink = proc.stdin as import("bun").FileSink;
+    sink.write(stdin);
+    await sink.end();
   }
   const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
+    new Response(proc.stdout as ReadableStream).text(),
+    new Response(proc.stderr as ReadableStream).text(),
     proc.exited,
   ]);
   return { code, stdout, stderr };
@@ -91,8 +101,9 @@ export class Forge {
     return this.platform === "gitlab" ? "glab" : "gh";
   }
 
-  private fail(stderr: string, fallback: string): ForgeError {
-    const text = stderr.trim() || fallback;
+  /** `stdout` is the response body: glab and gh may print the API's error JSON there. */
+  private fail(stderr: string, fallback: string, stdout = ""): ForgeError {
+    const text = [stderr.trim() || fallback, stdout.trim()].filter(Boolean).join("\n");
     const status = httpStatus(stderr);
     if (status === 401 || /not logged|authentication|auth login/i.test(stderr)) {
       const login = this.platform === "gitlab" ? `glab auth login --hostname ${this.host}` : "gh auth login";
@@ -114,8 +125,8 @@ export class Forge {
     ];
     const r = await this.run(this.bin, args, body !== undefined ? JSON.stringify(body) : undefined);
     // Exit code decides failure: snap glab warns on stderr on every call.
-    if (r.code !== 0) throw this.fail(r.stderr, `${this.bin} exited ${r.code}`);
-    if (!r.stdout.trim()) return null;
+    if (r.code !== 0) throw this.fail(r.stderr, `${this.bin} exited ${r.code}`, r.stdout);
+    if (!r.stdout.trim()) return o.paginate ? [] : null;
     let values: unknown[];
     try {
       values = parseJsonStream(r.stdout);
@@ -141,7 +152,7 @@ export class Forge {
     if (Array.isArray(parsed?.errors) && parsed.errors.length > 0) {
       throw new ForgeError(parsed.errors.map((e: { message?: string }) => e.message ?? JSON.stringify(e)).join("; "));
     }
-    if (r.code !== 0) throw this.fail(r.stderr, `gh exited ${r.code}`);
+    if (r.code !== 0) throw this.fail(r.stderr, `gh exited ${r.code}`, r.stdout);
     if (parsed === undefined) throw new ForgeError("gh api graphql: unparseable response");
     return parsed.data;
   }
