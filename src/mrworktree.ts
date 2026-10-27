@@ -27,7 +27,8 @@ const gitMessage = (r: { stdout: string; stderr: string }): string => (r.stderr.
 /**
  * A worktree on the MR's source branch, up to date with origin, where fixes can be made without touching the
  * user's own checkout. Reuses a worktree that already has the branch; otherwise creates
- * `<projectPath>.worktrees/<kind>-<number>`. Refuses anything unsafe; never stashes, resets or forces.
+ * `<projectPath>.worktrees/<kind>-<number>`. Refuses anything unsafe, including local commits origin doesn't have
+ * (the fix agent pushes the branch); never stashes, resets or forces.
  */
 export async function prepareFixWorktree(
   git: GitRunner,
@@ -87,6 +88,17 @@ export async function prepareFixWorktree(
     throw e instanceof OrchError ? new OrchError(`${made}${e.message}`) : e;
   }
   if (pull.code !== 0) throw new OrchError(`${made}git pull --ff-only origin ${b} failed in ${dir}: ${gitMessage(pull)}`);
+
+  // Whatever the agent pushes from here goes on the MR: local commits nobody reviewed must not ride along.
+  const aheadArgs = ["rev-list", "--count", `refs/remotes/origin/${b}..HEAD`];
+  const aheadOut = await git(dir, aheadArgs);
+  const ahead = Number(aheadOut.stdout.trim());
+  if (aheadOut.code !== 0 || !aheadOut.stdout.trim() || !Number.isInteger(ahead)) {
+    throw new OrchError(`${made}git ${aheadArgs.join(" ")} failed in ${dir}: ${gitMessage(aheadOut)}`);
+  }
+  if (ahead > 0) {
+    throw new OrchError(`${made}${b} has local commits not on origin (${ahead} ahead); push or drop them yourself first — /mr-fix won't publish them`);
+  }
 
   return { path: dir, branch: b, created };
 }

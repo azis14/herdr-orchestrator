@@ -616,6 +616,7 @@ describe("cli mr", () => {
       if (cmd === "remote get-url origin") return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
       if (cmd === "worktree list --porcelain") return { code: 0, stdout: `worktree ${reg.projects[0].path}\nHEAD 1111\nbranch refs/heads/dev\n`, stderr: "" };
       if (args[0] === "rev-parse") return { code: 1, stdout: "", stderr: "" };
+      if (args[0] === "rev-list") return { code: 0, stdout: "0\n", stderr: "" };
       return { code: 0, stdout: "", stderr: "" };
     };
     const forge = fakeForge({

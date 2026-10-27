@@ -24,6 +24,8 @@ interface Setup {
   baseBranch?: string;
   localBranch?: boolean;
   dirty?: boolean;
+  /** Local commits on the branch that origin doesn't have. */
+  ahead?: number;
   pull?: { code: number; stdout: string; stderr: string; timedOut?: boolean };
   fetch?: { code: number; stdout: string; stderr: string; timedOut?: boolean };
   /** Reuse an existing project (default: a fresh one). */
@@ -47,6 +49,7 @@ function setup(s: Setup = {}) {
     if (args[0] === "rev-parse") return s.localBranch ? ok("abc\n") : { code: 1, stdout: "", stderr: "" };
     if (args[0] === "status") return ok(s.dirty ? " M a.ts\n" : "");
     if (args[0] === "pull") return s.pull ?? ok("Already up to date.\n");
+    if (args[0] === "rev-list") return ok(`${s.ahead ?? 0}\n`);
     return ok();
   };
   return { project, git, calls, timeouts, wtDir: `${project.path}.worktrees/pr-9` };
@@ -84,7 +87,8 @@ describe("prepareFixWorktree", () => {
     expect(await prepareFixWorktree(t.git, t.project, mrInfo())).toEqual({ path: wt, branch: "fix/cart", created: false });
     expect(t.calls.some((c) => c.args[0] === "worktree" && c.args[1] === "add")).toBe(false);
     expect(t.calls).toContainEqual({ cwd: wt, args: ["status", "--porcelain"] });
-    expect(t.calls.at(-1)).toEqual({ cwd: wt, args: ["pull", "--ff-only", "origin", "fix/cart"] });
+    expect(t.calls.at(-2)).toEqual({ cwd: wt, args: ["pull", "--ff-only", "origin", "fix/cart"] });
+    expect(t.calls.at(-1)).toEqual({ cwd: wt, args: ["rev-list", "--count", "refs/remotes/origin/fix/cart..HEAD"] });
   });
 
   test("creates from origin when there is no local branch", async () => {
@@ -92,7 +96,8 @@ describe("prepareFixWorktree", () => {
     expect(await prepareFixWorktree(t.git, t.project, mrInfo())).toEqual({ path: t.wtDir, branch: "fix/cart", created: true });
     expect(t.calls[0]).toEqual({ cwd: t.project.path, args: ["fetch", "origin", "fix/cart"] });
     expect(t.calls).toContainEqual({ cwd: t.project.path, args: ["worktree", "add", "--track", "-b", "fix/cart", t.wtDir, "origin/fix/cart"] });
-    expect(t.calls.at(-1)).toEqual({ cwd: t.wtDir, args: ["pull", "--ff-only", "origin", "fix/cart"] });
+    expect(t.calls.at(-2)).toEqual({ cwd: t.wtDir, args: ["pull", "--ff-only", "origin", "fix/cart"] });
+    expect(t.calls.at(-1)).toEqual({ cwd: t.wtDir, args: ["rev-list", "--count", "refs/remotes/origin/fix/cart..HEAD"] });
     expect(mutating(t.calls)).toEqual([]);
   });
 
@@ -163,6 +168,23 @@ describe("prepareFixWorktree", () => {
       { args: ["fetch", "origin", "fix/cart"], timeoutMs: 60_000 },
       { args: ["pull", "--ff-only", "origin", "fix/cart"], timeoutMs: 60_000 },
     ]);
+  });
+
+  test("refuses a branch with local commits origin doesn't have, and never resets it", async () => {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "orch-wt-"));
+    try {
+      const t = setup({ worktrees: [{ path: wt, branch: "fix/cart" }], ahead: 2 });
+      await expect(prepareFixWorktree(t.git, t.project, mrInfo())).rejects.toThrow(
+        "fix/cart has local commits not on origin (2 ahead); push or drop them yourself first — /mr-fix won't publish them",
+      );
+      expect(t.calls.at(-1)).toEqual({ cwd: wt, args: ["rev-list", "--count", "refs/remotes/origin/fix/cart..HEAD"] });
+      expect(mutating(t.calls)).toEqual([]);
+    } finally {
+      fs.rmSync(wt, { recursive: true, force: true });
+    }
+    // A worktree just created from a local branch that is ahead says it was created.
+    const created = setup({ localBranch: true, ahead: 1 });
+    await expect(prepareFixWorktree(created.git, created.project, mrInfo())).rejects.toThrow(`created ${created.wtDir}; fix/cart has local commits not on origin (1 ahead)`);
   });
 
   test("stops on uncommitted changes", async () => {
