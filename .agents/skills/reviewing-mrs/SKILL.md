@@ -51,6 +51,7 @@ It is the code the reviewers and the verifier read. The user's checkout is never
 Run the repo's own checks in `<WT>`, never on a fork (`fork: true` → every check is "not run (fork)"):
 
 - Which checks, how to run them, and how to install and set up env files all come from the repo: `CLAUDE.md` / `AGENTS.md` / `README`, `package.json` scripts, `Makefile`. Usually lint, typecheck and tests, plus anything the rules say a change must pass.
+- `/mr-review` pre-approves only `orch mr` / `orch skills` and the `git -C` reads and worktree calls in this skill, so the user approves each check, install or setup command when asked. A refused one is "not run (not approved)".
 - Installs only with the frozen lockfile. Env files only as the repo's rules describe; never invent values or copy secrets the rules don't mention.
 - Record each check as passed, failed (keep the errors with their `path:line`) or not run (with the reason: no such check, setup the rules don't describe, install failed, no network). Never stop the review because checks can't run.
 
