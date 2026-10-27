@@ -128,8 +128,8 @@ describe("skills", () => {
         "Bash(git -C * diff *)",
         "Bash(git -C * log *)",
         "Bash(git -C * blame *)",
-        "Bash(git -C * worktree add --detach *)",
-        "Bash(git -C * worktree remove --force *)",
+        "Bash(git -C * worktree add --detach */mr-*/wt *)",
+        "Bash(git -C * worktree remove --force */mr-*/wt)",
         "Bash(mktemp -d *)",
       ]),
     );

@@ -130,7 +130,7 @@ When a job agent needs a skill, it uses the repo's own copy if there is one, oth
 
 - **Repo rules win.** A repo's `CLAUDE.md`, `AGENTS.md`, rules and skills override the orchestrator's defaults for worktrees, base branch, branch names, env setup and where docs go.
 - The orchestrator never pushes, opens merge requests, or answers an agent's permission dialog without you. The one exception: invoking `/mr-fix` approves its agent committing and pushing to that MR's own branch, and replying to and resolving the threads it fixed.
-- `.claude/settings.json` (tracked) allows the calls a review makes, `bun orch.ts mr post` included, so a background `/mr-review` isn't stopped by permission prompts it can't answer. Invoking `/mr-review` without `--dry-run` is the approval to post. These allow rules apply to every session in this repo, not only `/mr-review`: `mr post` and `git -C … worktree remove --force` are allowed from any session here.
+- `.claude/settings.json` (tracked) allows the calls a review makes, `bun orch.ts mr post` included, so a background `/mr-review` isn't stopped by permission prompts it can't answer. Invoking `/mr-review` without `--dry-run` is the approval to post. These allow rules apply to every session in this repo, not only `/mr-review`: `mr post` is allowed from any session here. Force-removal is allowed only for a review's own worktree (`git -C … worktree remove --force */mr-*/wt`, and `worktree add --detach */mr-*/wt <head>` to create it), never for another worktree.
 - It only closes Herdr workspaces, tabs and panes it created.
 
 ## Development
