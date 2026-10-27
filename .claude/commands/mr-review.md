@@ -33,13 +33,13 @@ Keep track of the reviews you started in this session whose runner hasn't report
 
 ## 3. Start the runner
 
-Make its run directory under this session's scratchpad directory (the one your system prompt names; without one, `mktemp -d -t mr-<project>-<number>-XXXX`):
+Make its run directory under this session's scratchpad directory (the one your system prompt names). With no scratchpad, say a background review can't run here (a run directory elsewhere is outside the working directory, so the runner's reads and writes there would be denied) and stop.
 
 ```bash
 mktemp -d <scratchpad>/mr-<project>-<number>-XXXX
 ```
 
-Start the runner in the background: Agent tool, `subagent_type: "mr-review-runner"`, `run_in_background: true`, description `review <project> <number>`. Its brief:
+Start the runner in the background: Agent tool, `subagent_type: "mr-review-runner"`, `run_in_background: true` if the Agent tool has that parameter (where it doesn't, subagents already run in the background), description `review <project> <number>`. Its brief:
 
 - `Reference: <project> <number>`
 - `URL: <url>`

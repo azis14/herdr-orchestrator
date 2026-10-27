@@ -13,7 +13,7 @@ Every platform call goes through `bun orch.ts mr …`, run from the orchestrator
 
 `/mr-review` runs this skill in a background `mr-review-runner` subagent, which can't ask the user anything: there is no AskUserQuestion, and a tool call that isn't allowed is denied, never prompted. So wherever a step says to ask the user or wait for them, **stop with `needs-user`** instead: remove the head worktree if there is one, write the report (step 9) saying what the user has to do and whether anything was posted, and reply with status `needs-user` and the reason.
 
-Every file of the run goes in `<run dir>`, so reviews running at once never collide: the head worktree `<run dir>/wt`, the review JSON `<run dir>/review.json`, the report `<run dir>/report.md`. The caller makes `<run dir>` with `mktemp -d <scratchpad>/mr-<project>-<number>-XXXX`; given none, make it that way after step 1.
+Every file of the run goes in `<run dir>`, so reviews running at once never collide: the head worktree `<run dir>/wt`, the review JSON `<run dir>/review.json`, the report `<run dir>/report.md`. The caller makes `<run dir>` with `mktemp -d <scratchpad>/mr-<project>-<number>-XXXX`, under the session's scratchpad directory; given none, make it that way after step 1. With no scratchpad, stop with `needs-user`: a run directory anywhere else is outside the working directory, so reads and writes there would be denied.
 
 ## 1. Resolve
 
