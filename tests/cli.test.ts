@@ -521,6 +521,44 @@ describe("cli mr", () => {
     expect(r.notes[0].id).toBe("2");
   });
 
+  test("mr position exits 3 for a line outside every hunk", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) => {
+      if (args.join(" ") === "remote get-url origin") {
+        return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      }
+      if (args[0] === "diff") return { code: 0, stdout: "@@ -1,2 +1,3 @@\n a\n+b\n c\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const mk = () =>
+      testDeps({}, {
+        reg,
+        git,
+        forge: fakeForge({
+          "GET projects/g%2Fp/merge_requests/3": () => ({
+            stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h" } },
+          }),
+          "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+          "GET user": () => ({ stdout: { username: "me" } }),
+        }),
+      });
+    const outside = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--path", "a.ts", "--line", "50", "--json"], outside.deps)).toBe(3);
+    expect(outside.out.join("\n")).toContain('"kind": "outside"');
+    const inside = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--path", "a.ts", "--line", "2", "--json"], inside.deps)).toBe(0);
+    expect(JSON.parse(inside.out[0])).toMatchObject({ kind: "added", line: 2 });
+    const plain = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--path", "a.ts", "--line", "50"], plain.deps)).toBe(3);
+    expect(plain.out[0]).toContain("outside");
+  });
+
+  test("mr position needs --path and --line", async () => {
+    const { deps, err } = testDeps();
+    expect(await main(["mr", "position", "shop-api", "3", "--line", "2"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("--path");
+  });
+
   test("mr with no subcommand prints mr usage", async () => {
     const { deps, err } = testDeps();
     expect(await main(["mr"], deps)).toBe(1);

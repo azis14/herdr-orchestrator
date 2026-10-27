@@ -12,6 +12,7 @@ import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
+import { diffPosition, type Side } from "./src/diffpos";
 import { listThreads, showMr } from "./src/mr";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
@@ -78,7 +79,8 @@ const USAGE = `usage: bun orch.ts <command>
   job spawn <id> <project> [agent] [--repo-worktree] [--trust]
   mr show <ref> [--fetch] [--json]
   mr threads <ref> [--json]
-  mr position|post|note|reply|resolve|worktree ...
+  mr position <ref> --path P --line N [--old-path O] [--side new|old] [--json]
+  mr post|note|reply|resolve|worktree ...
                                  review and fix a GitLab MR / GitHub PR; <ref> is its URL, or <project> <id> (id 42, !42 or #42)`;
 
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
@@ -436,6 +438,40 @@ const commands: Record<string, Command> = {
           deps.out(`${mr.kind} ${mr.number}: ${r.threads.length} threads (${open} unresolved), ${r.notes.length} notes`);
         }
         return 0;
+      }
+      case "position": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: {
+            path: { type: "string" },
+            "old-path": { type: "string" },
+            line: { type: "string" },
+            side: { type: "string" },
+            json: { type: "boolean" },
+          },
+        });
+        if (!values.path) throw new OrchError("mr position needs --path <file at head>");
+        const line = Number(values.line);
+        if (!values.line || !Number.isInteger(line) || line < 1) throw new OrchError("mr position needs --line <positive integer>");
+        const side = values.side ?? "new";
+        if (side !== "new" && side !== "old") throw new OrchError(`--side must be new or old, got "${side}"`);
+        const mr = await showMr(deps, positionals, { fetch: true });
+        if (!mr.base) throw new OrchError(`no base commit for ${mr.kind} ${mr.number}`);
+        const pos = await diffPosition(deps.git, mr.projectPath, mr.base, mr.head, {
+          path: values.path,
+          oldPath: values["old-path"],
+          line,
+          side: side as Side,
+        });
+        if (values.json) {
+          deps.out(JSON.stringify(pos, null, 2));
+        } else if (pos.kind === "outside") {
+          deps.out(`outside: ${pos.path}:${line} (${side}) is not in any hunk`);
+        } else {
+          deps.out(`${pos.kind} ${pos.path}${pos.line !== undefined ? ` line ${pos.line}` : ""}${pos.oldLine !== undefined ? ` oldLine ${pos.oldLine}` : ""}`);
+        }
+        return pos.kind === "outside" ? 3 : 0;
       }
       default:
         throw new OrchError("usage: mr show|threads|position|post|note|reply|resolve|worktree ...");
