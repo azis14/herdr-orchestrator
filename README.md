@@ -47,7 +47,7 @@ Then, for example:
 | `/code [project \| path \| .]` | Opens a project's repo, or any directory, in VS Code. |
 | `/status` | Shows every Herdr agent mapped to its project and job, plus what each open job is waiting on. |
 | `/cleanup [workspace...]` | Lists dormant agents and closes only the ones you approve. |
-| `/mr-review <MR/PR URL \| project id> [--dry-run]` | Reviews a GitLab merge request or GitHub pull request of a registered project with parallel reviewer agents (running the repo's own checks on the head first), verifies each finding, and posts the survivors as inline comments plus a summary. `--dry-run` posts nothing and shows every comment in chat. Invoking it is the approval to post. |
+| `/mr-review <MR/PR URL \| project id> [--dry-run]` | Reviews a GitLab merge request or GitHub pull request of a registered project with parallel reviewer agents (running the repo's own checks on the head first), verifies each finding, and posts the survivors as inline comments plus a summary. `--dry-run` posts nothing and shows every comment in chat. Invoking it is the approval to post. An MR URL is matched to a project by its `origin` remote's host and path, so an `origin` that uses an SSH host alias (e.g. `git@gitlab-work:group/repo.git`) won't match it, and `<project> <id>` would take the alias for the server's host name: point `origin` at the real host for `/mr-review` and `/mr-fix`. |
 | `/mr-fix <MR/PR URL \| project id> [agent]` | Fixes the open review threads of an MR/PR in an agent tab of its project, in a worktree on the MR's own branch, watched from here. The agent commits and pushes to that branch, replies in each thread and resolves the fixed ones. Refuses fork MRs/PRs. |
 | `/register <path> [name]` | Reads the repo, proposes a name, description and context files, and saves them after you approve. |
 | `/unregister <project>` | Removes a project from the registry (refused while an unfinished job includes it). The repo itself is untouched. |
@@ -81,15 +81,15 @@ bun orch.ts job agent <id> <agentName> key=value...
 bun orch.ts job spawn <id> <project> [agent] [--repo-worktree] [--trust]
 bun orch.ts mr show <ref> [--fetch] [--json]
 bun orch.ts mr threads <ref> [--json]
-bun orch.ts mr position <ref> --path P --line N [--old-path O] [--side new|old] [--json]
-bun orch.ts mr post <ref> [--dry-run] [--json]
+bun orch.ts mr position <ref> --path P --line N [--old-path O] [--side new|old] [--head SHA] [--json]
+bun orch.ts mr post <ref> [--dry-run] [--head SHA] [--json]
 bun orch.ts mr note <ref> [--json]
 bun orch.ts mr reply <ref> --thread ID [--json]
 bun orch.ts mr resolve <ref> --thread ID [--json]
 bun orch.ts mr worktree <ref> [--protect a,b] [--json]
 ```
 
-`<ref>` is an MR/PR URL, or `<project> <id>` with the id as a bare number (`bun orch.ts mr show shop-api 42`). `post`, `note` and `reply` read their body from stdin.
+`<ref>` is an MR/PR URL, or `<project> <id>` with the id as a bare number (`bun orch.ts mr show shop-api 42`). `post`, `note` and `reply` read their body from stdin. `--head SHA` makes `position` and `post` refuse (exit 1, posting nothing) if the MR's head is no longer the SHA you reviewed. `mr post` exits 3, posting nothing, when a comment isn't on a changed line, and any error it raises before sending anything says "nothing was posted".
 
 The CLI does the mechanics (registry, Herdr calls, job records, spawning) deterministically. Judgment — routing questions between agents, checking cross-repo contracts, stopping for approval — lives in the `orchestrate-job` skill, which `/job` loads.
 
