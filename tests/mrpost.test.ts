@@ -407,12 +407,44 @@ describe("postReview on GitHub", () => {
         },
       }),
     );
-    const err = await postReview(t.deps, mrInfo("github"), input([{ path: "src/a.ts", line: 12, body: "x" }])).catch((e) => e);
+    const err = await postReview(
+      t.deps,
+      mrInfo("github"),
+      input([
+        { path: "src/a.ts", line: 12, body: "x" },
+        { path: "src/a.ts", line: 13, body: "y" },
+        { path: "src/a.ts", line: 11, body: "z" },
+      ]),
+    ).catch((e) => e);
     expect(err).toBeInstanceOf(OrchError);
     expect(err.message).toContain("socket hang up");
+    expect(err.message).toContain("interrupted (outcome unknown): src/a.ts:12");
+    expect(err.message).toContain("not attempted: src/a.ts:13, src/a.ts:11");
     expect(err.message).toContain("review R1");
     expect(err.message).toContain("still pending on https://github.com/acme/shop/pull/9#pullrequestreview-1");
     expect(err.message).toContain("submit or discard");
+  });
+
+  test("GitHub: a review start without an id, or a transport failure, warns it may be pending", async () => {
+    const MAYBE = "a review may have been created and left pending; check https://github.com/acme/shop/pull/9 and submit or discard it";
+    const noId = setup(ghHandlers({ "graphql AddReview": () => ({ stdout: { data: { addPullRequestReview: { pullRequestReview: null } } } }) }));
+    const e1 = await postReview(noId.deps, mrInfo("github"), input([{ path: "src/a.ts", line: 12, body: "x" }])).catch((e) => e);
+    expect(e1).toBeInstanceOf(OrchError);
+    expect(e1.message).toContain("no review id");
+    expect(e1.message).toContain(MAYBE);
+    expect(graphqlCalls(noId.forge).map((c) => opName(c.query))).toEqual(["AddReview"]);
+
+    const transport = setup(
+      ghHandlers({
+        "graphql AddReview": () => {
+          throw new Error("connection reset");
+        },
+      }),
+    );
+    const e2 = await postReview(transport.deps, mrInfo("github"), input([{ path: "src/a.ts", line: 12, body: "x" }])).catch((e) => e);
+    expect(e2).toBeInstanceOf(OrchError);
+    expect(e2.message).toContain("connection reset");
+    expect(e2.message).toContain(MAYBE);
   });
 
   test("GitHub: a failed submit says the review is still pending", async () => {

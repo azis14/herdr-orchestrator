@@ -311,14 +311,18 @@ async function postGithub(forge: Forge, mr: MrInfo, input: ReviewInput, placed: 
     if (e instanceof OrchError && /pending review/i.test(e.message)) {
       throw new OrchError(`you already have a pending review on pr ${mr.number} (${e.message}); submit or discard it on ${mr.url}, then post again`);
     }
-    throw e;
+    // The call may have reached GitHub before failing (or answered without an id).
+    const why = e instanceof Error ? e.message : String(e);
+    throw new OrchError(`starting the review on pr ${mr.number} failed: ${why}\na review may have been created and left pending; check ${mr.url} and submit or discard it`);
   }
 
   // From here on a pending review exists: nothing may escape without saying so.
   const results: CommentResult[] = [];
+  let next = 0; // index of the comment being (or next to be) attempted
   try {
     const failed: ReviewComment[] = [];
-    for (const { c, pos } of placed) {
+    for (; next < placed.length; next++) {
+      const { c, pos } = placed[next];
       try {
         const data = await forge.graphql(ADD_THREAD, { input: { pullRequestReviewId: reviewId, ...githubAnchor(c, pos), body: renderBody("github", c) } });
         const thread = data?.addPullRequestReviewThread?.thread;
@@ -335,9 +339,17 @@ async function postGithub(forge: Forge, mr: MrInfo, input: ReviewInput, placed: 
     return { comments: results, summaryUrl: data?.submitPullRequestReview?.pullRequestReview?.url ?? null };
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
-    throw new OrchError(
-      `review ${reviewId} on pr ${mr.number} was not submitted: ${why}\nIt is still pending on ${reviewUrl}; submit or discard it there.\nComments:\n${describeResults(results) || "(none posted)"}`,
-    );
+    const where = (p: Placed) => `${p.c.path}:${p.c.line}`;
+    const lines = [
+      `review ${reviewId} on pr ${mr.number} was not submitted: ${why}`,
+      `It is still pending on ${reviewUrl}; submit or discard it there.`,
+      `Comments:\n${describeResults(results) || "(none posted)"}`,
+    ];
+    if (next < placed.length) {
+      lines.push(`interrupted (outcome unknown): ${where(placed[next])}`);
+      if (next + 1 < placed.length) lines.push(`not attempted: ${placed.slice(next + 1).map(where).join(", ")}`);
+    }
+    throw new OrchError(lines.join("\n"));
   }
 }
 
