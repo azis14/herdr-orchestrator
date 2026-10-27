@@ -126,7 +126,7 @@ Write the summary as `mr-comments` describes: counts by severity, check results,
 Write `{"summary": "…", "comments": [{"path", "oldPath"?, "line", "side", "body", "suggestion"?}]}` to `<run dir>/review.json`, then:
 
 ```bash
-orch mr post <ref> --head <head> --json [--dry-run] < <run dir>/review.json
+bun orch.ts mr post <ref> --head <head> --json [--dry-run] --input <run dir>/review.json
 ```
 
 `--head` makes `post` refuse, posting nothing, if the MR moved since you reviewed it (a dry run too).

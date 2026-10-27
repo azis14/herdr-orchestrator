@@ -33,7 +33,7 @@ bun orch.ts job new|list|show|stage|log|agent|spawn ...
 bun orch.ts mr show <ref> [--fetch] [--json]          # an MR/PR's metadata (state, fork, branches, head sha); --fetch also makes its head and base local (fetching only what's missing); <ref> is its URL, or <project> <id> (bare number)
 bun orch.ts mr threads <ref> [--json]                 # its review threads, resolved or not
 bun orch.ts mr position <ref> --path P --line N [--old-path O] [--side new|old] [--head SHA]   # where an inline comment would land; checks the line is changed
-bun orch.ts mr post <ref> [--dry-run] [--head SHA]    # post a review ({summary, comments} JSON on stdin); exits 3, posting nothing, if a comment is off the diff
+bun orch.ts mr post <ref> [--dry-run] [--head SHA] [--input FILE]    # post a review ({summary, comments} JSON from FILE, else stdin); exits 3, posting nothing, if a comment is off the diff
                                                       # --head SHA (both): exit 1, posting nothing, if the MR's head is no longer the reviewed SHA
                                                       # errors raised before anything is sent say "nothing was posted"
 bun orch.ts mr note <ref>                             # post a general note (body on stdin); prints its url

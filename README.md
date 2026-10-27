@@ -82,14 +82,14 @@ bun orch.ts job spawn <id> <project> [agent] [--repo-worktree] [--trust]
 bun orch.ts mr show <ref> [--fetch] [--json]
 bun orch.ts mr threads <ref> [--json]
 bun orch.ts mr position <ref> --path P --line N [--old-path O] [--side new|old] [--head SHA] [--json]
-bun orch.ts mr post <ref> [--dry-run] [--head SHA] [--json]
+bun orch.ts mr post <ref> [--dry-run] [--head SHA] [--json] [--input FILE]
 bun orch.ts mr note <ref> [--json]
 bun orch.ts mr reply <ref> --thread ID [--json]
 bun orch.ts mr resolve <ref> --thread ID [--json]
 bun orch.ts mr worktree <ref> [--protect a,b] [--json]
 ```
 
-`<ref>` is an MR/PR URL, or `<project> <id>` with the id as a bare number (`bun orch.ts mr show shop-api 42`). `post`, `note` and `reply` read their body from stdin. `--head SHA` makes `position` and `post` refuse (exit 1, posting nothing) if the MR's head is no longer the SHA you reviewed. `mr post` exits 3, posting nothing, when a comment isn't on a changed line, and any error it raises before sending anything says "nothing was posted".
+`<ref>` is an MR/PR URL, or `<project> <id>` with the id as a bare number (`bun orch.ts mr show shop-api 42`). `note` and `reply` read their body from stdin; `post` reads the review JSON from `--input FILE` (so a background agent needs no shell redirect), else from stdin. `--head SHA` makes `position` and `post` refuse (exit 1, posting nothing) if the MR's head is no longer the SHA you reviewed. `mr post` exits 3, posting nothing, when a comment isn't on a changed line, and any error it raises before sending anything says "nothing was posted".
 
 The CLI does the mechanics (registry, Herdr calls, job records, spawning) deterministically. Judgment — routing questions between agents, checking cross-repo contracts, stopping for approval — lives in the `orchestrate-job` skill, which `/job` loads.
 
