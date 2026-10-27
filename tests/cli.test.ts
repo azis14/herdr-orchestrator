@@ -608,6 +608,36 @@ describe("cli mr", () => {
     expect(bad.posted()).toBe(false);
   });
 
+  test("mr worktree prints the fix worktree path, and --protect refuses the source branch", async () => {
+    const reg = testRegistry();
+    const dir = `${reg.projects[0].path}.worktrees/mr-3`;
+    const git: GitRunner = async (cwd, args) => {
+      const cmd = args.join(" ");
+      if (cmd === "remote get-url origin") return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      if (cmd === "worktree list --porcelain") return { code: 0, stdout: `worktree ${reg.projects[0].path}\nHEAD 1111\nbranch refs/heads/dev\n`, stderr: "" };
+      if (args[0] === "rev-parse") return { code: 1, stdout: "", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const forge = fakeForge({
+      "GET projects/g%2Fp/merge_requests/3": () => ({
+        stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h" },
+      }),
+      "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+      "GET user": () => ({ stdout: { username: "me" } }),
+    });
+    const t = testDeps({}, { reg, git, forge });
+    expect(await main(["mr", "worktree", "shop-api", "3"], t.deps)).toBe(0);
+    expect(t.out).toEqual([dir]);
+
+    const j = testDeps({}, { reg, git, forge });
+    expect(await main(["mr", "worktree", "shop-api", "3", "--json"], j.deps)).toBe(0);
+    expect(JSON.parse(j.out.join(""))).toEqual({ path: dir, branch: "feat", created: true });
+
+    const p = testDeps({}, { reg, git, forge });
+    expect(await main(["mr", "worktree", "shop-api", "3", "--protect", "a,feat"], p.deps)).toBe(1);
+    expect(p.err.join("\n")).toContain("protected");
+  });
+
   test("mr note, reply and resolve print the url or resolved state", async () => {
     const reg = testRegistry();
     const git: GitRunner = async (cwd, args) =>

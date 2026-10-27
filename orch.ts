@@ -14,6 +14,7 @@ import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAge
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
 import { diffPosition, type Side } from "./src/diffpos";
 import { listThreads, showMr } from "./src/mr";
+import { prepareFixWorktree } from "./src/mrworktree";
 import { checkBody, formatPost, OutsideError, parseReviewInput, postNote, postReview, replyThread, resolveThread } from "./src/mrpost";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
@@ -89,7 +90,8 @@ const USAGE = `usage: bun orch.ts <command>
                                  reply in a review thread (body on stdin); prints the reply's url
   mr resolve <ref> --thread ID [--json]
                                  resolve a review thread; prints "resolved: true"
-  mr worktree ...
+  mr worktree <ref> [--protect a,b] [--json]
+                                 a worktree on the source branch to fix in (never your own checkout); prints its path
                                  review and fix a GitLab MR / GitHub PR; <ref> is its URL, or <project> <id> (id 42, !42 or #42)`;
 
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
@@ -520,6 +522,18 @@ const commands: Record<string, Command> = {
           const url = sub === "note" ? await postNote(deps, mr, body) : await replyThread(deps, mr, values.thread!, body);
           deps.out(values.json ? JSON.stringify({ url }) : url);
         }
+        return 0;
+      }
+      case "worktree": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { protect: { type: "string" }, json: { type: "boolean" } },
+        });
+        const mr = await showMr(deps, positionals);
+        const protect = (values.protect ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+        const wt = await prepareFixWorktree(deps.git, getProject(deps.reg, mr.project), mr, { protect });
+        deps.out(values.json ? JSON.stringify(wt, null, 2) : wt.path);
         return 0;
       }
       default:
