@@ -47,8 +47,8 @@ Then, for example:
 | `/code [project \| path \| .]` | Opens a project's repo, or any directory, in VS Code. |
 | `/status` | Shows every Herdr agent mapped to its project and job, plus what each open job is waiting on. |
 | `/cleanup [workspace...]` | Lists dormant agents and closes only the ones you approve. |
-| `/mr-review <MR/PR URL \| project id> [--dry-run]` | Reviews a GitLab merge request or GitHub pull request of a registered project with parallel reviewer agents (running the repo's own checks on the head first), verifies each finding, and posts the survivors as inline comments plus a summary. `--dry-run` posts nothing and shows every comment in chat. Invoking it is the approval to post. An MR URL is matched to a project by its `origin` remote's host and path, so an `origin` that uses an SSH host alias (e.g. `git@gitlab-work:group/repo.git`) won't match it, and `<project> <id>` would take the alias for the server's host name: point `origin` at the real host for `/mr-review` and `/mr-fix`. |
-| `/mr-fix <MR/PR URL \| project id> [agent]` | Fixes the open review threads of an MR/PR in an agent tab of its project, in a worktree on the MR's own branch, watched from here. The agent commits and pushes to that branch, replies in each thread and resolves the fixed ones. Refuses fork MRs/PRs. |
+| `/mr-review <MR/PR URL \| project id> [--dry-run]` | Reviews a GitLab merge request or GitHub pull request of a registered project with parallel reviewer agents (running the repo's own checks on the head first; outside auto mode the repo's check commands aren't allowed in the background, so they are reported as not run), verifies each finding, and posts the survivors as inline comments plus a summary. The review runs in the background (a `mr-review-runner` agent, which dispatches the reviewers and the verifier), so you can keep working or start another review meanwhile (not the same MR while its review is running in this session); the report comes back here. It needs the session scratchpad, and anything that needs you (a leftover pending GitHub review, a login problem) comes back as a stop with what to do. `--dry-run` posts nothing and shows every comment in chat. Invoking it is the approval to post. An MR URL is matched to a project by its `origin` remote's host and path, so an `origin` that uses an SSH host alias (e.g. `git@gitlab-work:group/repo.git`) won't match it, and `<project> <id>` would take the alias for the server's host name: point `origin` at the real host for `/mr-review` and `/mr-fix`. |
+| `/mr-fix <MR/PR URL \| project id> [agent]` | Fixes the open review threads of an MR/PR in an agent tab of its project, in a worktree on the MR's own branch, watched from here (it waits on the agent in the background, so you can keep working). The agent commits and pushes to that branch, replies in each thread and resolves the fixed ones. Refuses fork MRs/PRs. |
 | `/register <path> [name]` | Reads the repo, proposes a name, description and context files, and saves them after you approve. |
 | `/unregister <project>` | Removes a project from the registry (refused while an unfinished job includes it). The repo itself is untouched. |
 | `/agent add\|default\|remove <name>` | Adds Claude or Cursor, switches the default agent, or removes one. |
@@ -82,14 +82,14 @@ bun orch.ts job spawn <id> <project> [agent] [--repo-worktree] [--trust]
 bun orch.ts mr show <ref> [--fetch] [--json]
 bun orch.ts mr threads <ref> [--json]
 bun orch.ts mr position <ref> --path P --line N [--old-path O] [--side new|old] [--head SHA] [--json]
-bun orch.ts mr post <ref> [--dry-run] [--head SHA] [--json]
+bun orch.ts mr post <ref> [--dry-run] [--head SHA] [--json] [--input FILE]
 bun orch.ts mr note <ref> [--json]
 bun orch.ts mr reply <ref> --thread ID [--json]
 bun orch.ts mr resolve <ref> --thread ID [--json]
 bun orch.ts mr worktree <ref> [--protect a,b] [--json]
 ```
 
-`<ref>` is an MR/PR URL, or `<project> <id>` with the id as a bare number (`bun orch.ts mr show shop-api 42`). `post`, `note` and `reply` read their body from stdin. `--head SHA` makes `position` and `post` refuse (exit 1, posting nothing) if the MR's head is no longer the SHA you reviewed. `mr post` exits 3, posting nothing, when a comment isn't on a changed line, and any error it raises before sending anything says "nothing was posted".
+`<ref>` is an MR/PR URL, or `<project> <id>` with the id as a bare number (`bun orch.ts mr show shop-api 42`). `note` and `reply` read their body from stdin; `post` reads the review JSON from `--input FILE` (so a background agent needs no shell redirect), else from stdin. `--head SHA` makes `position` and `post` refuse (exit 1, posting nothing) if the MR's head is no longer the SHA you reviewed. `mr post` exits 3, posting nothing, when a comment isn't on a changed line, and any error it raises before sending anything says "nothing was posted".
 
 The CLI does the mechanics (registry, Herdr calls, job records, spawning) deterministically. Judgment — routing questions between agents, checking cross-repo contracts, stopping for approval — lives in the `orchestrate-job` skill, which `/job` loads.
 
@@ -130,6 +130,7 @@ When a job agent needs a skill, it uses the repo's own copy if there is one, oth
 
 - **Repo rules win.** A repo's `CLAUDE.md`, `AGENTS.md`, rules and skills override the orchestrator's defaults for worktrees, base branch, branch names, env setup and where docs go.
 - The orchestrator never pushes, opens merge requests, or answers an agent's permission dialog without you. The one exception: invoking `/mr-fix` approves its agent committing and pushing to that MR's own branch, and replying to and resolving the threads it fixed.
+- `.claude/settings.json` (tracked) allows the calls a review makes, `bun orch.ts mr post` included, so a background `/mr-review` isn't stopped by permission prompts it can't answer. Invoking `/mr-review` without `--dry-run` is the approval to post. These allow rules apply to every session in this repo, not only `/mr-review`: `mr post` is allowed from any session here. Force-removal is allowed only for a review's own worktree (`git -C … worktree remove --force */mr-*/wt`, and `worktree add --detach */mr-*/wt <head>` to create it), never for another worktree. The same file denies `git -C … -c`, `--config-env`, `--output` and `--ext-diff`, which would let a `git -C` read run a configured command or write a file; no review call uses them.
 - It only closes Herdr workspaces, tabs and panes it created.
 
 ## Development

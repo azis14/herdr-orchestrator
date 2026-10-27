@@ -113,13 +113,13 @@ export function checkReviewInput(raw: unknown): ReviewInput {
   return { summary: r.summary, comments };
 }
 
-/** The review JSON piped to `orch mr post`. */
-export function parseReviewInput(text: string): ReviewInput {
+/** The review JSON given to `orch mr post`, from stdin or from the `--input` file `source`. */
+export function parseReviewInput(text: string, source = "stdin"): ReviewInput {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
-    throw new OrchError('mr post reads the review as JSON on stdin ({"summary", "comments"}); stdin was not valid JSON');
+    throw new OrchError(`mr post reads the review as JSON ({"summary", "comments"}); ${source} was not valid JSON`);
   }
   return checkReviewInput(raw);
 }

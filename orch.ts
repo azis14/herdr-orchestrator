@@ -82,8 +82,8 @@ const USAGE = `usage: bun orch.ts <command>
   mr show <ref> [--fetch] [--json]
   mr threads <ref> [--json]
   mr position <ref> --path P --line N [--old-path O] [--side new|old] [--head SHA] [--json]
-  mr post <ref> [--dry-run] [--head SHA] [--json]
-                                 post a review ({summary, comments} JSON on stdin); exits 3, posting nothing,
+  mr post <ref> [--dry-run] [--head SHA] [--json] [--input FILE]
+                                 post a review ({summary, comments} JSON from FILE, else stdin); exits 3, posting nothing,
                                  if a comment is not on a changed line; --head SHA refuses (exit 1) if the head moved
   mr note <ref> [--json]         post a general note (body on stdin); prints its url
   mr reply <ref> --thread ID [--json]
@@ -497,12 +497,21 @@ const commands: Record<string, Command> = {
         const { positionals, values } = parseArgs({
           args: rest,
           allowPositionals: true,
-          options: { "dry-run": { type: "boolean" }, head: { type: "string" }, json: { type: "boolean" } },
+          options: { "dry-run": { type: "boolean" }, head: { type: "string" }, json: { type: "boolean" }, input: { type: "string" } },
         });
         let input: ReviewInput;
         let mr: MrInfo;
         try {
-          input = parseReviewInput(await deps.readStdin());
+          let raw: string;
+          if (values.input === undefined) raw = await deps.readStdin();
+          else {
+            try {
+              raw = fs.readFileSync(values.input, "utf8");
+            } catch (e) {
+              throw new OrchError(`cannot read --input ${values.input}: ${(e as Error).message}`);
+            }
+          }
+          input = parseReviewInput(raw, values.input === undefined ? "stdin" : values.input);
           mr = await showMr(deps, positionals, { fetch: true });
           checkReviewedHead(mr, values.head);
         } catch (e) {

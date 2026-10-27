@@ -93,4 +93,59 @@ describe("skills", () => {
     const clashes = fs.readdirSync(path.join(ORCH_ROOT, ".claude/skills")).filter((s) => commands.includes(s));
     expect(clashes).toEqual([]);
   });
+
+  test("every subagent_type named in commands, agents and skills has an agent file", () => {
+    const files = [
+      ...fs.readdirSync(path.join(ORCH_ROOT, ".claude/commands")).map((f) => path.join(".claude/commands", f)),
+      ...fs.readdirSync(path.join(ORCH_ROOT, ".claude/agents")).map((f) => path.join(".claude/agents", f)),
+      ...fs
+        .readdirSync(path.join(ORCH_ROOT, ".agents/skills"))
+        .map((d) => path.join(".agents/skills", d, "SKILL.md"))
+        .filter((f) => fs.existsSync(path.join(ORCH_ROOT, f))),
+    ].filter((f) => f.endsWith(".md"));
+    const named = new Set<string>();
+    for (const f of files) {
+      for (const m of fs.readFileSync(path.join(ORCH_ROOT, f), "utf8").matchAll(/subagent_type:\s*"([a-z0-9-]+)"/g)) {
+        if (m[1] !== "general-purpose") named.add(m[1]);
+      }
+    }
+    expect([...named]).toEqual(expect.arrayContaining(["mr-review-runner", "mr-reviewer", "mr-verifier"]));
+    const missing = [...named].filter((n) => !fs.existsSync(path.join(ORCH_ROOT, ".claude/agents", `${n}.md`)));
+    expect(missing).toEqual([]);
+  });
+
+  test("settings.json allows exactly the review's calls", () => {
+    const settings = JSON.parse(fs.readFileSync(path.join(ORCH_ROOT, ".claude/settings.json"), "utf8"));
+    expect(new Set(settings.permissions.allow)).toEqual(
+      new Set([
+        "Bash(bun orch.ts mr show:*)",
+        "Bash(bun orch.ts mr threads:*)",
+        "Bash(bun orch.ts mr position:*)",
+        "Bash(bun orch.ts mr post:*)",
+        "Bash(bun orch.ts skills:*)",
+        "Bash(git -C * show *)",
+        "Bash(git -C * ls-tree *)",
+        "Bash(git -C * diff *)",
+        "Bash(git -C * log *)",
+        "Bash(git -C * blame *)",
+        "Bash(git -C * worktree add --detach */mr-*/wt *)",
+        "Bash(git -C * worktree remove --force */mr-*/wt)",
+        "Bash(mktemp -d *)",
+      ]),
+    );
+    expect(settings.permissions.allow.length).toBe(13);
+  });
+
+  test("settings.json denies the git options that run code or write files", () => {
+    const settings = JSON.parse(fs.readFileSync(path.join(ORCH_ROOT, ".claude/settings.json"), "utf8"));
+    expect(new Set(settings.permissions.deny)).toEqual(
+      new Set([
+        "Bash(git -C * -c *)",
+        "Bash(git -C * --config-env*)",
+        "Bash(git -C * --output*)",
+        "Bash(git -C * --ext-diff*)",
+      ]),
+    );
+    expect(settings.permissions.deny.length).toBe(4);
+  });
 });

@@ -609,6 +609,62 @@ describe("cli mr", () => {
     expect(bad.posted()).toBe(false);
   });
 
+  test("mr post --input reads the review from a file, not stdin", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) => {
+      if (args.join(" ") === "remote get-url origin") {
+        return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      }
+      if (args[0] === "diff") return { code: 0, stdout: "@@ -1,2 +1,3 @@\n a\n+b\n c\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const mk = () => {
+      const forge = fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h" } },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+        "POST projects/g%2Fp/merge_requests/3/discussions": (_a, s) => ({ stdout: { id: "d1", notes: [{ id: 5, position: JSON.parse(s ?? "{}").position }] } }),
+        "POST projects/g%2Fp/merge_requests/3/notes": () => ({ stdout: { id: 6 } }),
+      });
+      const readStdin = async (): Promise<string> => {
+        throw new Error("stdin must not be read with --input");
+      };
+      return { ...testDeps({}, { reg, git, forge, readStdin }), calls: () => forge.calls.length, posted: () => forge.calls.some((c) => c.args.includes("POST")) };
+    };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orch-post-"));
+    try {
+      const file = path.join(dir, "review.json");
+      fs.writeFileSync(file, JSON.stringify({ summary: "## Review", comments: [{ path: "a.ts", line: 2, body: "y" }] }));
+
+      const real = mk();
+      expect(await main(["mr", "post", "shop-api", "3", "--json", "--input", file], real.deps)).toBe(0);
+      expect(JSON.parse(real.out.join("\n"))).toMatchObject({ summaryUrl: "https://gitlab.x.io/g/p/-/merge_requests/3#note_6" });
+      expect(real.posted()).toBe(true);
+
+      const missing = mk();
+      expect(await main(["mr", "post", "shop-api", "3", "--input", path.join(dir, "nope.json")], missing.deps)).toBe(1);
+      expect(missing.err.join("\n")).toContain("nope.json");
+      expect(missing.err.join("\n")).toContain("nothing was posted");
+      expect(missing.calls()).toBe(0);
+
+      const junk = path.join(dir, "junk.json");
+      fs.writeFileSync(junk, "not json");
+      const bad = mk();
+      expect(await main(["mr", "post", "shop-api", "3", "--input", junk], bad.deps)).toBe(1);
+      expect(bad.err.join("\n")).toContain(`${junk} was not valid JSON`);
+      expect(bad.err.join("\n")).toContain("nothing was posted");
+
+      const asDir = mk();
+      expect(await main(["mr", "post", "shop-api", "3", "--input", dir], asDir.deps)).toBe(1);
+      expect(asDir.err.join("\n")).toContain("nothing was posted");
+      expect(asDir.calls()).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("mr position and mr post --head refuse when the MR moved since the review", async () => {
     const reg = testRegistry();
     const diffs: string[][] = [];
