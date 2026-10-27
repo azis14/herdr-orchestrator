@@ -6,7 +6,9 @@ import { main } from "../orch";
 import { OrchError } from "../src/errors";
 import { newJob, upsertAgent } from "../src/jobs";
 import { claudeDirName } from "../src/sessions";
-import { ok, testDeps, ws } from "./fakes";
+import type { GitRunner } from "../src/git";
+import type { Registry } from "../src/registry";
+import { fakeForge, ok, testDeps, testRegistry, ws } from "./fakes";
 
 describe("cli open", () => {
   test("opens with default agent", async () => {
@@ -431,5 +433,327 @@ describe("cli open/bash folders and sessions", () => {
     t = testDeps();
     t.deps.git = git;
     expect(await main(["bash", "shop-api", "--folder", "/tmp"], t.deps)).toBe(1);
+  });
+});
+
+describe("cli mr", () => {
+  /** A git whose origin exists only in the registry's first project. */
+  const originFor =
+    (reg: Registry, origin: string): GitRunner =>
+    async (cwd, args) =>
+      args.join(" ") === "remote get-url origin" && cwd === reg.projects[0].path
+        ? { code: 0, stdout: `${origin}\n`, stderr: "" }
+        : { code: 128, stdout: "", stderr: "no origin" };
+
+  test("mr show --json prints MrInfo", async () => {
+    const reg = testRegistry();
+    const t = testDeps({}, {
+      reg,
+      git: originFor(reg, "git@github.com:acme/shop.git"),
+      forge: fakeForge({
+        "GET repos/acme/shop/pulls/9": () => ({
+          stdout: {
+            html_url: "https://github.com/acme/shop/pull/9",
+            node_id: "PR_9",
+            title: "Fix cart",
+            body: "",
+            user: { login: "bob" },
+            state: "open",
+            merged: false,
+            draft: false,
+            head: { ref: "fix/cart", sha: "abc", repo: { full_name: "acme/shop" } },
+            base: { ref: "dev", sha: "def", repo: { full_name: "acme/shop", default_branch: "main" } },
+          },
+        }),
+        "GET user": () => ({ stdout: { login: "me" } }),
+      }),
+    });
+    expect(await main(["mr", "show", "--json", "https://github.com/acme/shop/pull/9"], t.deps)).toBe(0);
+    const mr = JSON.parse(t.out.join("\n"));
+    expect(mr).toMatchObject({ kind: "pr", number: 9, project: "shop-api", head: "abc", nodeId: "PR_9", base: null });
+  });
+
+  test("mr show prints a one-line summary", async () => {
+    const reg = testRegistry();
+    const t = testDeps({}, {
+      reg,
+      git: originFor(reg, "git@gitlab.x.io:g/p.git"),
+      forge: fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h" },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+      }),
+    });
+    expect(await main(["mr", "show", "shop-api", "3"], t.deps)).toBe(0);
+    expect(t.out).toEqual(["mr 3 open feat → dev https://gitlab.x.io/g/p/-/merge_requests/3"]);
+  });
+
+  test("mr threads prints a count line, and --json prints the threads", async () => {
+    const reg = testRegistry();
+    const mk = () =>
+      testDeps({}, {
+        reg,
+        git: originFor(reg, "git@gitlab.x.io:g/p.git"),
+        forge: fakeForge({
+          "GET projects/g%2Fp/merge_requests/3": () => ({
+            stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h" },
+          }),
+          "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+          "GET user": () => ({ stdout: { username: "me" } }),
+          "GET projects/g%2Fp/merge_requests/3/discussions": () => ({
+            stdout: [
+              { id: "d1", notes: [{ id: 1, body: "x", author: { username: "a" }, created_at: "t", system: false, resolvable: true, resolved: false }] },
+              { id: "d2", notes: [{ id: 2, body: "y", author: { username: "a" }, created_at: "t", system: false, resolvable: false }] },
+            ],
+          }),
+        }),
+      });
+    const plain = mk();
+    expect(await main(["mr", "threads", "shop-api", "3"], plain.deps)).toBe(0);
+    expect(plain.out).toEqual(["mr 3: 1 threads (1 unresolved), 1 notes"]);
+    const json = mk();
+    expect(await main(["mr", "threads", "shop-api", "3", "--json"], json.deps)).toBe(0);
+    const r = JSON.parse(json.out[0]);
+    expect(r.me).toBe("me");
+    expect(r.threads[0].id).toBe("d1");
+    expect(r.notes[0].id).toBe("2");
+  });
+
+  test("mr position exits 3 for a line outside every hunk", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) => {
+      if (args.join(" ") === "remote get-url origin") {
+        return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      }
+      if (args[0] === "diff") return { code: 0, stdout: "@@ -1,2 +1,3 @@\n a\n+b\n c\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const mk = () =>
+      testDeps({}, {
+        reg,
+        git,
+        forge: fakeForge({
+          "GET projects/g%2Fp/merge_requests/3": () => ({
+            stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h" } },
+          }),
+          "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+          "GET user": () => ({ stdout: { username: "me" } }),
+        }),
+      });
+    const outside = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--path", "a.ts", "--line", "50", "--json"], outside.deps)).toBe(3);
+    expect(outside.out.join("\n")).toContain('"kind": "outside"');
+    const inside = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--path", "a.ts", "--line", "2", "--json"], inside.deps)).toBe(0);
+    expect(JSON.parse(inside.out[0])).toMatchObject({ kind: "added", line: 2 });
+    const plain = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--path", "a.ts", "--line", "50"], plain.deps)).toBe(3);
+    expect(plain.out[0]).toContain("outside");
+  });
+
+  test("mr position needs --path and --line", async () => {
+    const { deps, err } = testDeps();
+    expect(await main(["mr", "position", "shop-api", "3", "--line", "2"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("--path");
+  });
+
+  test("mr post reads stdin and exits 3 listing outside comments", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) => {
+      if (args.join(" ") === "remote get-url origin") {
+        return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      }
+      if (args[0] === "diff") return { code: 0, stdout: "@@ -1,2 +1,3 @@\n a\n+b\n c\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const mk = (stdin: string) => {
+      const forge = fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h" } },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+        "POST projects/g%2Fp/merge_requests/3/discussions": (_a, s) => ({ stdout: { id: "d1", notes: [{ id: 5, position: JSON.parse(s ?? "{}").position }] } }),
+        "POST projects/g%2Fp/merge_requests/3/notes": () => ({ stdout: { id: 6 } }),
+      });
+      const posted = () => forge.calls.some((c) => c.args.includes("POST"));
+      return { ...testDeps({}, { reg, git, forge, readStdin: async () => stdin }), posted };
+    };
+    const review = (line: number) => JSON.stringify({ summary: "## Review", comments: [{ path: "a.ts", line, body: "x" }, { path: "a.ts", line: 2, body: "y" }] });
+
+    const outside = mk(review(50));
+    expect(await main(["mr", "post", "shop-api", "3"], outside.deps)).toBe(3);
+    expect(JSON.parse(outside.out.join("\n"))).toEqual({ outside: [{ path: "a.ts", line: 50, body: "x" }] });
+    expect(outside.posted()).toBe(false);
+
+    const dry = mk(review(2));
+    expect(await main(["mr", "post", "shop-api", "3", "--dry-run", "--json"], dry.deps)).toBe(0);
+    expect(JSON.parse(dry.out.join("\n")).comments).toHaveLength(2);
+    expect(dry.posted()).toBe(false);
+
+    const real = mk(review(2));
+    expect(await main(["mr", "post", "shop-api", "3", "--json"], real.deps)).toBe(0);
+    expect(JSON.parse(real.out.join("\n"))).toMatchObject({ summaryUrl: "https://gitlab.x.io/g/p/-/merge_requests/3#note_6" });
+    expect(real.posted()).toBe(true);
+
+    const plain = mk(review(2));
+    expect(await main(["mr", "post", "shop-api", "3"], plain.deps)).toBe(0);
+    expect(plain.out.join("\n")).toContain("placed a.ts:2");
+
+    const bad = mk("not json");
+    expect(await main(["mr", "post", "shop-api", "3"], bad.deps)).toBe(1);
+    expect(bad.err.join("\n")).toContain("stdin");
+    expect(bad.err.join("\n")).toContain("nothing was posted");
+    expect(bad.posted()).toBe(false);
+  });
+
+  test("mr position and mr post --head refuse when the MR moved since the review", async () => {
+    const reg = testRegistry();
+    const diffs: string[][] = [];
+    const git: GitRunner = async (cwd, args) => {
+      if (args.join(" ") === "remote get-url origin") {
+        return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      }
+      if (args[0] === "diff") {
+        diffs.push(args);
+        return { code: 0, stdout: "@@ -1,2 +1,3 @@\n a\n+b\n c\n", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const mk = () => {
+      const forge = fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h2", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h2" } },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+        "POST projects/g%2Fp/merge_requests/3/discussions": (_a, s) => ({ stdout: { id: "d1", notes: [{ id: 5, position: JSON.parse(s ?? "{}").position }] } }),
+        "POST projects/g%2Fp/merge_requests/3/notes": () => ({ stdout: { id: 6 } }),
+      });
+      const review = JSON.stringify({ summary: "## Review", comments: [{ path: "a.ts", line: 2, body: "y" }] });
+      return { ...testDeps({}, { reg, git, forge, readStdin: async () => review }), posted: () => forge.calls.some((c) => c.args.includes("POST")) };
+    };
+    const moved = "the mr moved: head is now h2, reviewed h1; nothing was posted";
+
+    const pos = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--head", "h1", "--path", "a.ts", "--line", "2"], pos.deps)).toBe(1);
+    expect(pos.err.join("\n")).toContain(moved);
+    expect(diffs).toEqual([]);
+
+    const post = mk();
+    expect(await main(["mr", "post", "shop-api", "3", "--head", "h1", "--json"], post.deps)).toBe(1);
+    expect(post.err.join("\n")).toContain(moved);
+    expect(post.posted()).toBe(false);
+
+    const dry = mk();
+    expect(await main(["mr", "post", "shop-api", "3", "--head", "h1", "--dry-run"], dry.deps)).toBe(1);
+    expect(dry.err.join("\n")).toContain(moved);
+
+    const samePos = mk();
+    expect(await main(["mr", "position", "shop-api", "3", "--head", "h2", "--path", "a.ts", "--line", "2", "--json"], samePos.deps)).toBe(0);
+    expect(JSON.parse(samePos.out[0])).toMatchObject({ kind: "added", line: 2 });
+
+    const samePost = mk();
+    expect(await main(["mr", "post", "shop-api", "3", "--head", "h2", "--json"], samePost.deps)).toBe(0);
+    expect(samePost.posted()).toBe(true);
+  });
+
+  test("mr worktree prints the fix worktree path, and --protect refuses the source branch", async () => {
+    const reg = testRegistry();
+    const dir = `${reg.projects[0].path}.worktrees/mr-3`;
+    const git: GitRunner = async (cwd, args) => {
+      const cmd = args.join(" ");
+      if (cmd === "remote get-url origin") return cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+      if (cmd === "worktree list --porcelain") return { code: 0, stdout: `worktree ${reg.projects[0].path}\nHEAD 1111\nbranch refs/heads/dev\n`, stderr: "" };
+      if (args[0] === "rev-parse") return { code: 1, stdout: "", stderr: "" };
+      if (args[0] === "rev-list") return { code: 0, stdout: "0\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const forge = fakeForge({
+      "GET projects/g%2Fp/merge_requests/3": () => ({
+        stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h" },
+      }),
+      "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+      "GET user": () => ({ stdout: { username: "me" } }),
+    });
+    const t = testDeps({}, { reg, git, forge });
+    expect(await main(["mr", "worktree", "shop-api", "3"], t.deps)).toBe(0);
+    expect(t.out).toEqual([dir]);
+
+    const j = testDeps({}, { reg, git, forge });
+    expect(await main(["mr", "worktree", "shop-api", "3", "--json"], j.deps)).toBe(0);
+    expect(JSON.parse(j.out.join(""))).toEqual({ path: dir, branch: "feat", created: true });
+
+    const p = testDeps({}, { reg, git, forge });
+    expect(await main(["mr", "worktree", "shop-api", "3", "--protect", "a,feat"], p.deps)).toBe(1);
+    expect(p.err.join("\n")).toContain("protected");
+  });
+
+  test("mr note, reply and resolve print the url or resolved state", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) =>
+      args.join(" ") === "remote get-url origin" && cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+    const mk = (stdin: string) => {
+      const forge = fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h", diff_refs: { base_sha: "b", start_sha: "s", head_sha: "h" } },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+        "GET projects/g%2Fp/merge_requests/3/discussions": () => ({ stdout: [{ id: "d1", notes: [{ id: 1, resolvable: true, resolved: false, position: { new_path: "a.ts", new_line: 1 } }] }] }),
+        "POST projects/g%2Fp/merge_requests/3/notes": () => ({ stdout: { id: 6 } }),
+        "POST projects/g%2Fp/merge_requests/3/discussions/d1/notes": () => ({ stdout: { id: 7 } }),
+        "PUT projects/g%2Fp/merge_requests/3/discussions/d1": () => ({ stdout: { id: "d1", notes: [{ id: 1, resolved: true }] } }),
+      });
+      return { ...testDeps({}, { reg, git, forge, readStdin: async () => stdin }), forge };
+    };
+    const U = "https://gitlab.x.io/g/p/-/merge_requests/3";
+
+    const note = mk("hi");
+    expect(await main(["mr", "note", "shop-api", "3"], note.deps)).toBe(0);
+    expect(note.out).toEqual([`${U}#note_6`]);
+
+    const reply = mk("done");
+    expect(await main(["mr", "reply", "shop-api", "3", "--thread", "d1", "--json"], reply.deps)).toBe(0);
+    expect(JSON.parse(reply.out.join(""))).toEqual({ url: `${U}#note_7` });
+
+    const resolve = mk("");
+    expect(await main(["mr", "resolve", "shop-api", "3", "--thread", "d1"], resolve.deps)).toBe(0);
+    expect(resolve.out).toEqual(["resolved: true"]);
+
+    const noThread = mk("x");
+    expect(await main(["mr", "reply", "shop-api", "3"], noThread.deps)).toBe(1);
+    expect(noThread.err.join("\n")).toContain("--thread");
+
+    const empty = mk("  ");
+    expect(await main(["mr", "note", "shop-api", "3"], empty.deps)).toBe(1);
+    expect(empty.err.join("\n")).toContain("empty");
+    expect(empty.forge.calls).toEqual([]);
+  });
+
+  test("mr resolve exits 1 when the thread comes back unresolved", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) =>
+      args.join(" ") === "remote get-url origin" && cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+    const forge = fakeForge({
+      "GET projects/g%2Fp/merge_requests/3": () => ({
+        stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h" },
+      }),
+      "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+      "GET user": () => ({ stdout: { username: "me" } }),
+      "GET projects/g%2Fp/merge_requests/3/discussions": () => ({ stdout: [{ id: "d1", notes: [{ id: 1, resolvable: true, resolved: false }] }] }),
+      "PUT projects/g%2Fp/merge_requests/3/discussions/d1": () => ({ stdout: { id: "d1", notes: [{ id: 1, resolved: false }] } }),
+    });
+    const t = testDeps({}, { reg, git, forge });
+    expect(await main(["mr", "resolve", "shop-api", "3", "--thread", "d1"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("thread d1 is still unresolved");
+  });
+
+  test("mr with no subcommand prints mr usage", async () => {
+    const { deps, err } = testDeps();
+    expect(await main(["mr"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("usage: mr");
   });
 });

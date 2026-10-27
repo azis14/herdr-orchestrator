@@ -26,6 +26,17 @@ describe("detect", () => {
     expect(text).toContain(AGENT_PRESETS[1].install);
   });
 
+  test("reports gh and glab as optional tools", () => {
+    const d = detect(emptyDir(), (b) => (b === "gh" ? "/usr/bin/gh" : null), {});
+    expect(d.optional).toEqual([
+      { name: "gh", found: true, path: "/usr/bin/gh" },
+      { name: "glab", found: false, path: null },
+    ]);
+    const text = formatDetection(d);
+    expect(text).toContain("Optional (for /mr-review, /mr-fix):");
+    expect(text).toContain("glab: not found");
+  });
+
   test("existing registry is reported", () => {
     const dir = emptyDir();
     fs.writeFileSync(

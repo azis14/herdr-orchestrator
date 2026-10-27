@@ -5,6 +5,8 @@ import { readJson } from "./registry";
 
 export interface Detection {
   prereqs: { name: "bun" | "herdr" | "git"; found: boolean; path: string | null }[];
+  /** Only needed by /mr-review and /mr-fix. */
+  optional: { name: "gh" | "glab"; found: boolean; path: string | null }[];
   insideHerdr: boolean;
   agents: { name: string; bin: string; install: string; found: boolean; registered: boolean; isDefault: boolean }[];
   /** `exists` means both registry files are present. */
@@ -25,6 +27,10 @@ export function detect(
   const defaultAgent: string | null = agents?.defaultAgent ?? null;
   return {
     prereqs: (["bun", "herdr", "git"] as const).map((name) => {
+      const p = which(name);
+      return { name, found: p !== null, path: p };
+    }),
+    optional: (["gh", "glab"] as const).map((name) => {
       const p = which(name);
       return { name, found: p !== null, path: p };
     }),
@@ -49,6 +55,8 @@ export function formatDetection(d: Detection): string {
   const lines = ["Prerequisites:"];
   for (const p of d.prereqs) lines.push(`  ${p.name}: ${p.found ? p.path : "not found"}`);
   lines.push(`  inside Herdr: ${d.insideHerdr ? "yes" : "no (run this from a Herdr pane)"}`);
+  lines.push("Optional (for /mr-review, /mr-fix):");
+  for (const p of d.optional) lines.push(`  ${p.name}: ${p.found ? p.path : "not found"}`);
   lines.push("Agents:");
   for (const a of d.agents) {
     const state = [a.found ? "installed" : `not found (install: ${a.install})`];

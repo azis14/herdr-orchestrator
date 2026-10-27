@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { main } from "../orch";
 import { OrchError } from "../src/errors";
+import { ORCH_ROOT } from "../src/registry";
 import { projectSkills, resolveSkill, scanSkills } from "../src/skills";
 import { testDeps, testRegistry } from "./fakes";
 
@@ -83,5 +84,13 @@ describe("skills", () => {
     const parsed = JSON.parse(out.join("\n"));
     expect(parsed.project).toBe("shop-api");
     expect(parsed.repoSkills[0].name).toBe("x");
+  });
+
+  test("orchestrator ships the review skills but no skill named like a command", () => {
+    const names = scanSkills(ORCH_ROOT).map((s) => s.name);
+    expect(names).toEqual(expect.arrayContaining(["reviewing-mrs", "mr-comments", "mr-fix"]));
+    const commands = fs.readdirSync(path.join(ORCH_ROOT, ".claude/commands")).map((f) => f.replace(/\.md$/, ""));
+    const clashes = fs.readdirSync(path.join(ORCH_ROOT, ".claude/skills")).filter((s) => commands.includes(s));
+    expect(clashes).toEqual([]);
   });
 });

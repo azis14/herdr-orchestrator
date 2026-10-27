@@ -6,11 +6,16 @@ import { parseArgs } from "node:util";
 import { closeAgents, findDormant, formatAge, formatDormant, parseDuration } from "./src/cleanup";
 import { vscodeRunner, type EditorRunner } from "./src/editor";
 import { OrchError } from "./src/errors";
+import { forgeRunner, type ForgeRunner } from "./src/forge";
 import { resolveFolder } from "./src/folders";
 import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
+import { diffPosition, type Side } from "./src/diffpos";
+import { listThreads, showMr, type MrInfo } from "./src/mr";
+import { prepareFixWorktree } from "./src/mrworktree";
+import { checkBody, formatPost, nothingPosted, OutsideError, parseReviewInput, postNote, postReview, replyThread, resolveThread, type ReviewInput } from "./src/mrpost";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
@@ -34,6 +39,10 @@ export interface Deps {
   /** Cursor's chat root (`~/.cursor/chats`). */
   cursorChats: string;
   children: ChildrenRunner;
+  /** Runs gh / glab. */
+  forge: ForgeRunner;
+  /** Everything piped to this process on stdin. */
+  readStdin: () => Promise<string>;
   /** Where a binary is on PATH, or null. */
   which: (bin: string) => string | null;
   env: Record<string, string | undefined>;
@@ -69,11 +78,32 @@ const USAGE = `usage: bun orch.ts <command>
   job new <slug> --title T --request R --projects a,b
   job list | job show <id> | job stage <id> <stage> | job log <id> <text>
   job agent <id> <agentName> key=value...   (status, designPath, planPath, branch, worktreePath)
-  job spawn <id> <project> [agent] [--repo-worktree] [--trust]`;
+  job spawn <id> <project> [agent] [--repo-worktree] [--trust]
+  mr show <ref> [--fetch] [--json]
+  mr threads <ref> [--json]
+  mr position <ref> --path P --line N [--old-path O] [--side new|old] [--head SHA] [--json]
+  mr post <ref> [--dry-run] [--head SHA] [--json]
+                                 post a review ({summary, comments} JSON on stdin); exits 3, posting nothing,
+                                 if a comment is not on a changed line; --head SHA refuses (exit 1) if the head moved
+  mr note <ref> [--json]         post a general note (body on stdin); prints its url
+  mr reply <ref> --thread ID [--json]
+                                 reply in a review thread (body on stdin); prints the reply's url
+  mr resolve <ref> --thread ID [--json]
+                                 resolve a review thread; prints "resolved: true", exits 1 if it stays unresolved
+  mr worktree <ref> [--protect a,b] [--json]
+                                 a worktree on the source branch to fix in (never your own checkout); prints its path
+                                 review and fix a GitLab MR / GitHub PR; <ref> is its URL, or <project> <id> (id 42, !42 or #42)`;
 
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
 
 type Command = (args: string[], deps: Deps) => Promise<number>;
+
+/** Refuses when the MR's head isn't the `reviewed` one (a push landed during the review): its line numbers may have shifted. */
+function checkReviewedHead(mr: { kind: string; head: string }, reviewed: string | undefined): void {
+  if (reviewed !== undefined && reviewed !== mr.head) {
+    throw new OrchError(`the ${mr.kind} moved: head is now ${mr.head}, reviewed ${reviewed}; nothing was posted`);
+  }
+}
 
 const commands: Record<string, Command> = {
   async open(args, deps) {
@@ -401,6 +431,132 @@ const commands: Record<string, Command> = {
         throw new OrchError("usage: job new|list|show|stage|log|agent|spawn ...");
     }
   },
+
+  async mr(args, deps) {
+    const [sub, ...rest] = args;
+    switch (sub) {
+      case "show": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { fetch: { type: "boolean" }, json: { type: "boolean" } },
+        });
+        const mr = await showMr(deps, positionals, { fetch: values.fetch });
+        deps.out(values.json ? JSON.stringify(mr, null, 2) : `${mr.kind} ${mr.number} ${mr.state} ${mr.sourceBranch} → ${mr.targetBranch} ${mr.url}`);
+        return 0;
+      }
+      case "threads": {
+        const { positionals, values } = parseArgs({ args: rest, allowPositionals: true, options: { json: { type: "boolean" } } });
+        const mr = await showMr(deps, positionals);
+        const r = await listThreads(deps, mr);
+        if (values.json) {
+          deps.out(JSON.stringify(r, null, 2));
+        } else {
+          const open = r.threads.filter((t) => t.resolvable && !t.resolved).length;
+          deps.out(`${mr.kind} ${mr.number}: ${r.threads.length} threads (${open} unresolved), ${r.notes.length} notes`);
+        }
+        return 0;
+      }
+      case "position": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: {
+            path: { type: "string" },
+            "old-path": { type: "string" },
+            line: { type: "string" },
+            side: { type: "string" },
+            head: { type: "string" },
+            json: { type: "boolean" },
+          },
+        });
+        if (!values.path) throw new OrchError("mr position needs --path <file at head>");
+        const line = Number(values.line);
+        if (!values.line || !Number.isInteger(line) || line < 1) throw new OrchError("mr position needs --line <positive integer>");
+        const side = values.side ?? "new";
+        if (side !== "new" && side !== "old") throw new OrchError(`--side must be new or old, got "${side}"`);
+        const mr = await showMr(deps, positionals, { fetch: true });
+        checkReviewedHead(mr, values.head);
+        if (!mr.base) throw new OrchError(`no base commit for ${mr.kind} ${mr.number}`);
+        const pos = await diffPosition(deps.git, mr.projectPath, mr.base, mr.head, {
+          path: values.path,
+          oldPath: values["old-path"],
+          line,
+          side: side as Side,
+        });
+        if (values.json) {
+          deps.out(JSON.stringify(pos, null, 2));
+        } else if (pos.kind === "outside") {
+          deps.out(`outside: ${pos.path}:${line} (${side}) is not in any hunk`);
+        } else {
+          deps.out(`${pos.kind} ${pos.path}${pos.line !== undefined ? ` line ${pos.line}` : ""}${pos.oldLine !== undefined ? ` oldLine ${pos.oldLine}` : ""}`);
+        }
+        return pos.kind === "outside" ? 3 : 0;
+      }
+      case "post": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { "dry-run": { type: "boolean" }, head: { type: "string" }, json: { type: "boolean" } },
+        });
+        let input: ReviewInput;
+        let mr: MrInfo;
+        try {
+          input = parseReviewInput(await deps.readStdin());
+          mr = await showMr(deps, positionals, { fetch: true });
+          checkReviewedHead(mr, values.head);
+        } catch (e) {
+          throw nothingPosted(e);
+        }
+        let r: Awaited<ReturnType<typeof postReview>>;
+        try {
+          r = await postReview(deps, mr, input, { dryRun: values["dry-run"] });
+        } catch (e) {
+          if (!(e instanceof OutsideError)) throw e;
+          deps.out(JSON.stringify({ outside: e.outside }, null, 2));
+          deps.err(`orch: ${e.message}`);
+          return 3;
+        }
+        deps.out(values.json ? JSON.stringify(r, null, 2) : formatPost(r));
+        return 0;
+      }
+      case "note":
+      case "reply":
+      case "resolve": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { thread: { type: "string" }, json: { type: "boolean" } },
+        });
+        if (sub !== "note" && !values.thread) throw new OrchError(`mr ${sub} needs --thread ID (see \`mr threads\`)`);
+        const body = sub === "resolve" ? "" : checkBody(await deps.readStdin());
+        const mr = await showMr(deps, positionals);
+        if (sub === "resolve") {
+          const resolved = await resolveThread(deps, mr, values.thread!);
+          if (!resolved) throw new OrchError(`thread ${values.thread} is still unresolved`);
+          deps.out(values.json ? JSON.stringify({ resolved }) : `resolved: ${resolved}`);
+        } else {
+          const url = sub === "note" ? await postNote(deps, mr, body) : await replyThread(deps, mr, values.thread!, body);
+          deps.out(values.json ? JSON.stringify({ url }) : url);
+        }
+        return 0;
+      }
+      case "worktree": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { protect: { type: "string" }, json: { type: "boolean" } },
+        });
+        const mr = await showMr(deps, positionals);
+        const protect = (values.protect ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+        const wt = await prepareFixWorktree(deps.git, getProject(deps.reg, mr.project), mr, { protect });
+        deps.out(values.json ? JSON.stringify(wt, null, 2) : wt.path);
+        return 0;
+      }
+      default:
+        throw new OrchError("usage: mr show|threads|position|post|note|reply|resolve|worktree ...");
+    }
+  },
 };
 
 export async function main(argv: string[], deps: Deps): Promise<number> {
@@ -437,6 +593,8 @@ if (import.meta.main) {
       claudeProjects: path.join(os.homedir(), ".claude", "projects"),
       cursorChats: path.join(os.homedir(), ".cursor", "chats"),
       children: procChildren,
+      forge: forgeRunner,
+      readStdin: () => Bun.stdin.text(),
       which: (bin) => Bun.which(bin),
       env: process.env,
       out: (s) => console.log(s),
