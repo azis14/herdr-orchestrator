@@ -32,6 +32,11 @@ describe("parseMrUrl", () => {
     expect(parseMrUrl("https://example.com/foo")).toBeNull();
     expect(parseMrUrl("not a url")).toBeNull();
   });
+
+  test("a malformed percent-escape is no MR, not a crash", () => {
+    expect(parseMrUrl("https://gitlab.x.io/g/%E0%A4%A/-/merge_requests/1")).toBeNull();
+    expect(parseMrUrl("https://github.com/a/%E0%A4%A/pull/1")).toBeNull();
+  });
 });
 
 describe("parseRemote", () => {
@@ -47,9 +52,23 @@ describe("parseRemote", () => {
     }
     expect(parseRemote("")).toBeNull();
   });
+
+  test("a malformed percent-escape is no remote, not a crash", () => {
+    expect(parseRemote("https://gitlab.x.io/g/%E0%A4%A.git")).toBeNull();
+  });
 });
 
 describe("resolveRef", () => {
+  test("one project with a malformed origin doesn't stop the scan", async () => {
+    const reg = testRegistry(["broken", "shop-ui"]);
+    const git = gitWithOrigins(reg, {
+      broken: "https://gitlab.acclime.cloud/x/%E0%A4%A.git",
+      "shop-ui": "git@gitlab.acclime.cloud:shop/ui.git",
+    });
+    const r = await resolveRef(reg, git, ["https://gitlab.acclime.cloud/shop/ui/-/merge_requests/5"]);
+    expect(r.project.name).toBe("shop-ui");
+  });
+
   test("a URL resolves to the project whose origin matches", async () => {
     const reg = testRegistry(["shop-api", "shop-ui"]);
     const git = gitWithOrigins(reg, {

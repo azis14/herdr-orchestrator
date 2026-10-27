@@ -15,6 +15,15 @@ export interface ResolvedRef extends MrRef {
 
 const USAGE = "usage: mr <sub> <MR/PR URL | project id>   (id is 42, !42 or #42)";
 
+/** `decodeURI(s)`, or null for a malformed percent-escape (one bad origin mustn't crash a scan of every project). */
+const decodePath = (s: string): string | null => {
+  try {
+    return decodeURI(s);
+  } catch {
+    return null;
+  }
+};
+
 /** Only github.com is GitHub; every other host is GitLab. */
 const platformOf = (host: string): Platform => (host === "github.com" ? "github" : "gitlab");
 
@@ -28,7 +37,8 @@ export function parseMrUrl(url: string): MrRef | null {
   }
   if (u.protocol !== "https:" && u.protocol !== "http:") return null;
   const host = u.hostname.toLowerCase();
-  const path = decodeURI(u.pathname);
+  const path = decodePath(u.pathname);
+  if (path === null) return null;
   if (host === "github.com") {
     const m = path.match(/^\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\/|$)/);
     return m ? { platform: "github", host, repo: m[1], number: Number(m[2]) } : null;
@@ -53,7 +63,9 @@ export function parseRemote(url: string): { host: string; repo: string } | null 
       return null;
     }
     host = u.hostname;
-    repo = decodeURI(u.pathname);
+    const decoded = decodePath(u.pathname);
+    if (decoded === null) return null;
+    repo = decoded;
   }
   repo = repo.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
   if (!host || !repo) return null;
