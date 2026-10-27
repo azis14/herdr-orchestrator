@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { OrchError } from "./errors";
 import { listFolders } from "./folders";
-import { gitRemote, type GitRunner } from "./git";
+import { gitRemote, type GitResult, type GitRunner } from "./git";
 import type { MrInfo } from "./mr";
 import type { Project } from "./registry";
 
@@ -81,7 +81,7 @@ export async function prepareFixWorktree(
   if (status.stdout.trim() !== "") {
     throw new OrchError(`${made}${dir} has uncommitted changes; commit or discard them first. Nothing was stashed or reset.`);
   }
-  let pull: Awaited<ReturnType<GitRunner>>;
+  let pull: GitResult;
   try {
     pull = await gitRemote(git, dir, ["pull", "--ff-only", "origin", b], "origin");
   } catch (e) {

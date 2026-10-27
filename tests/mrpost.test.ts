@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { OrchError } from "../src/errors";
 import type { GitRunner } from "../src/git";
 import type { MrDeps, MrInfo } from "../src/mr";
-import { appendUnposted, OutsideError, postNote, postReview, renderBody, replyThread, resolveThread, type DryRun, type PostResult, type ReviewInput } from "../src/mrpost";
+import { appendUnposted, nothingPosted, OutsideError, postNote, postReview, renderBody, replyThread, resolveThread, type DryRun, type PostResult, type ReviewInput } from "../src/mrpost";
 import { fakeForge, testRegistry, type FakeReply } from "./fakes";
 
 type Handlers = Record<string, (args: string[], stdin?: string) => FakeReply>;
@@ -189,6 +189,24 @@ describe("postReview validation", () => {
       { dryRun: true },
     );
     expect(diffCalls).toBe(1);
+  });
+});
+
+describe("nothingPosted", () => {
+  test("adds the note after a one-line error, before a multi-line one (so a login command stays last)", () => {
+    expect((nothingPosted(new OrchError("bad input")) as Error).message).toBe("bad input; nothing was posted");
+    expect((nothingPosted(new OrchError("401\nNot logged in. Log in, then retry:\n! gh auth login")) as Error).message).toBe(
+      "nothing was posted: 401\nNot logged in. Log in, then retry:\n! gh auth login",
+    );
+  });
+
+  test("leaves exit-3 errors, errors already saying it, and non-orch errors alone", () => {
+    const outside = new OutsideError([]);
+    expect(nothingPosted(outside)).toBe(outside);
+    const said = new OrchError("x; nothing was posted");
+    expect(nothingPosted(said)).toBe(said);
+    const bug = new TypeError("boom");
+    expect(nothingPosted(bug)).toBe(bug);
   });
 });
 

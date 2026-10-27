@@ -82,7 +82,8 @@ const NOTHING_POSTED = "nothing was posted";
  */
 export function nothingPosted(e: unknown): unknown {
   if (!(e instanceof OrchError) || e instanceof OutsideError || e.message.includes(NOTHING_POSTED)) return e;
-  return new OrchError(`${e.message}${e.message.includes("\n") ? "\n" : "; "}${NOTHING_POSTED}`);
+  // A multi-line error may end with a command to run (`! gh auth login`): keep that last.
+  return new OrchError(e.message.includes("\n") ? `${NOTHING_POSTED}: ${e.message}` : `${e.message}; ${NOTHING_POSTED}`);
 }
 
 const isInt = (n: unknown, min: number) => Number.isInteger(n) && (n as number) >= min;
