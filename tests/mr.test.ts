@@ -356,7 +356,7 @@ describe("listThreads", () => {
     const t = setup(GH_ORIGIN, {
       ...ghHandlers(),
       "GET repos/acme/shop/issues/9/comments": () => ({
-        stdout: [{ id: 11, body: "looks good overall", user: { login: "dave" }, created_at: "2026-10-03T08:00:00Z", html_url: "https://github.com/acme/shop/pull/9#issuecomment-11" }],
+        stdout: [{ id: 11, body: "looks good overall", user: { login: "dave" }, created_at: "2026-10-05T08:00:00Z", html_url: "https://github.com/acme/shop/pull/9#issuecomment-11" }],
       }),
       "GET repos/acme/shop/pulls/9/reviews": () => ({
         stdout: [
@@ -372,12 +372,35 @@ describe("listThreads", () => {
     const mr = await showMr(t.deps, [GH_URL]);
     const r = await listThreads(t.deps, mr);
     expect(r.threads).toEqual([]);
+    // merged in time order: the review body (10-04) comes before the issue comment (10-05)
     expect(r.notes).toEqual([
-      { id: "11", author: "dave", body: "looks good overall", createdAt: "2026-10-03T08:00:00Z", system: false, url: "https://github.com/acme/shop/pull/9#issuecomment-11" },
       { id: "21", author: "erin", body: "needs work", createdAt: "2026-10-04T08:00:00Z", system: false, url: "https://github.com/acme/shop/pull/9#pullrequestreview-21" },
+      { id: "11", author: "dave", body: "looks good overall", createdAt: "2026-10-05T08:00:00Z", system: false, url: "https://github.com/acme/shop/pull/9#issuecomment-11" },
     ]);
     for (const c of t.forge.calls.filter((c) => c.args.includes("--method") && c.args.some((a) => /issues|reviews/.test(a)))) {
       expect(c.args).toContain("--paginate");
     }
+  });
+
+  test("GitHub: a thread with more than 100 comments fails loudly", async () => {
+    const t = setup(GH_ORIGIN, {
+      ...ghHandlers(),
+      "graphql ReviewThreads": () => ({
+        stdout: {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [ghThread("t9", { comments: { pageInfo: { hasNextPage: true }, nodes: [] } })],
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+    const mr = await showMr(t.deps, [GH_URL]);
+    await expect(listThreads(t.deps, mr)).rejects.toThrow("review thread t9 on src/cart.ts has more than 100 comments; orch can't list it yet");
   });
 });

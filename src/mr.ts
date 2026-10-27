@@ -154,7 +154,7 @@ const REVIEW_THREADS_QUERY = `query ReviewThreads($owner: String!, $name: String
         pageInfo { hasNextPage endCursor }
         nodes {
           id isResolved isOutdated path line originalLine diffSide
-          comments(first: 100) { nodes { id body createdAt url author { login } } }
+          comments(first: 100) { pageInfo { hasNextPage } nodes { id body createdAt url author { login } } }
         }
       }
     }
@@ -205,6 +205,9 @@ export async function listThreads(deps: MrDeps, mr: MrInfo): Promise<MrThreads> 
       const data: any = await forge.graphql(REVIEW_THREADS_QUERY, { owner, name, number: mr.number, cursor });
       const page = data?.repository?.pullRequest?.reviewThreads;
       for (const t of page?.nodes ?? []) {
+        if (t.comments?.pageInfo?.hasNextPage) {
+          throw new OrchError(`review thread ${t.id} on ${t.path ?? "(no path)"} has more than 100 comments; orch can't list it yet`);
+        }
         threads.push({
           id: t.id,
           resolvable: true,
@@ -236,5 +239,6 @@ export async function listThreads(deps: MrDeps, mr: MrInfo): Promise<MrThreads> 
       notes.push({ id: String(r.id), author: r.user?.login ?? "", body: r.body, createdAt: r.submitted_at ?? "", system: false, url: r.html_url ?? "" });
     }
   }
+  if (mr.platform === "github") notes.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return { me: mr.me, threads, notes };
 }
