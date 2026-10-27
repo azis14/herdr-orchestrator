@@ -6,18 +6,22 @@ import { fakeForge, testRegistry, type FakeReply } from "./fakes";
 type Handlers = Record<string, (args: string[], stdin?: string) => FakeReply>;
 
 /** MrDeps whose first project has the given origin; `gitExtra` answers any other git call. */
-function setup(origin: string, forgeHandlers: Handlers, gitExtra: (cwd: string, args: string[]) => FakeReply = () => ({})) {
+type GitReply = FakeReply & { timedOut?: boolean };
+
+function setup(origin: string, forgeHandlers: Handlers, gitExtra: (cwd: string, args: string[]) => GitReply = () => ({})) {
   const reg = testRegistry(["shop-api"]);
   const gitCalls: { cwd: string; args: string[] }[] = [];
-  const git: GitRunner = async (cwd, args) => {
+  const gitOptions: { args: string[]; timeoutMs?: number }[] = [];
+  const git: GitRunner = async (cwd, args, o) => {
     if (args.join(" ") === "remote get-url origin") return { code: 0, stdout: `${origin}\n`, stderr: "" };
     gitCalls.push({ cwd, args });
+    if (o) gitOptions.push({ args, ...o });
     const r = gitExtra(cwd, args);
-    return { code: r.code ?? 0, stdout: String(r.stdout ?? ""), stderr: String(r.stderr ?? "") };
+    return { code: r.code ?? 0, stdout: String(r.stdout ?? ""), stderr: String(r.stderr ?? ""), ...(r.timedOut ? { timedOut: true } : {}) };
   };
   const forge = fakeForge(forgeHandlers);
   const deps: MrDeps = { reg, git, forge };
-  return { deps, forge, gitCalls, project: reg.projects[0] };
+  return { deps, forge, gitCalls, gitOptions, project: reg.projects[0] };
 }
 
 const glMr = (over: Record<string, unknown> = {}) => ({
@@ -204,6 +208,16 @@ describe("showMr --fetch", () => {
   test("fails when the fetch fails", async () => {
     const t = setup(GL_ORIGIN, glHandlers(), (_cwd, args) => (args[0] === "fetch" ? { code: 128, stderr: "fatal: no remote" } : {}));
     await expect(showMr(t.deps, [GL_URL], { fetch: true })).rejects.toThrow("fatal: no remote");
+  });
+
+  test("a fetch that hangs times out with a clear error", async () => {
+    const t = setup(GL_ORIGIN, glHandlers(), (_cwd, args) =>
+      args[0] === "fetch" ? { code: 124, timedOut: true } : args[0] === "cat-file" ? { code: 1 } : {},
+    );
+    await expect(showMr(t.deps, [GL_URL], { fetch: true })).rejects.toThrow(
+      "git fetch origin refs/merge-requests/42/head dev timed out after 60s; check that origin is reachable",
+    );
+    expect(t.gitOptions).toEqual([{ args: ["fetch", "origin", "refs/merge-requests/42/head", "dev"], timeoutMs: 60_000 }]);
   });
 
   test("fails when head is not reachable", async () => {

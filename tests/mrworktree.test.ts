@@ -24,8 +24,8 @@ interface Setup {
   baseBranch?: string;
   localBranch?: boolean;
   dirty?: boolean;
-  pull?: { code: number; stdout: string; stderr: string };
-  fetch?: { code: number; stdout: string; stderr: string };
+  pull?: { code: number; stdout: string; stderr: string; timedOut?: boolean };
+  fetch?: { code: number; stdout: string; stderr: string; timedOut?: boolean };
   /** Reuse an existing project (default: a fresh one). */
   project?: ReturnType<typeof testRegistry>["projects"][number];
 }
@@ -33,12 +33,14 @@ interface Setup {
 function setup(s: Setup = {}) {
   const project = s.project ?? testRegistry(["shop-api"]).projects[0];
   const calls: { cwd: string; args: string[] }[] = [];
+  const timeouts: { args: string[]; timeoutMs?: number }[] = [];
   const list =
     [{ path: project.path, branch: s.baseBranch ?? "dev" }, ...(s.worktrees ?? [])]
       .map((w) => `worktree ${w.path}\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/${w.branch}`)
       .join("\n\n") + "\n";
-  const git: GitRunner = async (cwd, args) => {
+  const git: GitRunner = async (cwd, args, o) => {
     calls.push({ cwd, args });
+    if (o) timeouts.push({ args, ...o });
     const cmd = args.join(" ");
     if (cmd === "worktree list --porcelain") return ok(list);
     if (args[0] === "fetch") return s.fetch ?? ok();
@@ -47,7 +49,7 @@ function setup(s: Setup = {}) {
     if (args[0] === "pull") return s.pull ?? ok("Already up to date.\n");
     return ok();
   };
-  return { project, git, calls, wtDir: `${project.path}.worktrees/pr-9` };
+  return { project, git, calls, timeouts, wtDir: `${project.path}.worktrees/pr-9` };
 }
 
 const mutating = (calls: { args: string[] }[]) =>
@@ -144,6 +146,23 @@ describe("prepareFixWorktree", () => {
   test("refuses when the fetch fails", async () => {
     const t = setup({ fetch: fail("fatal: couldn't find remote ref fix/cart") });
     await expect(prepareFixWorktree(t.git, t.project, mrInfo())).rejects.toThrow("couldn't find remote ref");
+  });
+
+  test("a fetch or pull that hangs times out with a clear error", async () => {
+    const hung = { code: 124, stdout: "", stderr: "", timedOut: true };
+    const f = setup({ fetch: hung });
+    await expect(prepareFixWorktree(f.git, f.project, mrInfo())).rejects.toThrow(
+      "git fetch origin fix/cart timed out after 60s; check that origin is reachable",
+    );
+    expect(f.calls.some((c) => c.args[0] === "worktree" && c.args[1] === "add")).toBe(false);
+    const p = setup({ pull: hung });
+    await expect(prepareFixWorktree(p.git, p.project, mrInfo())).rejects.toThrow(
+      "git pull --ff-only origin fix/cart timed out after 60s; check that origin is reachable",
+    );
+    expect(p.timeouts).toEqual([
+      { args: ["fetch", "origin", "fix/cart"], timeoutMs: 60_000 },
+      { args: ["pull", "--ff-only", "origin", "fix/cart"], timeoutMs: 60_000 },
+    ]);
   });
 
   test("stops on uncommitted changes", async () => {

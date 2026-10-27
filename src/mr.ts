@@ -1,6 +1,7 @@
 import type { Deps } from "../orch";
 import { OrchError } from "./errors";
 import { Forge, type Platform } from "./forge";
+import { gitRemote } from "./git";
 import { resolveRef } from "./mrref";
 
 export interface MrInfo {
@@ -103,7 +104,7 @@ export async function showMr(deps: MrDeps, args: string[], o: { fetch?: boolean 
   if (o.fetch) {
     const headRef = gitlab ? `refs/merge-requests/${info.number}/head` : `refs/pull/${info.number}/head`;
     const fetchArgs = ["fetch", "origin", headRef, info.targetBranch];
-    const f = await deps.git(info.projectPath, fetchArgs);
+    const f = await gitRemote(deps.git, info.projectPath, fetchArgs, "origin");
     if (f.code !== 0) throw new OrchError(`git ${fetchArgs.join(" ")} failed in ${info.projectPath}: ${f.stderr.trim()}`);
     const c = await deps.git(info.projectPath, ["cat-file", "-e", `${info.head}^{commit}`]);
     if (c.code !== 0) {

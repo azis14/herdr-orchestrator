@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { OrchError } from "./errors";
 import { listFolders } from "./folders";
-import type { GitRunner } from "./git";
+import { gitRemote, type GitRunner } from "./git";
 import type { MrInfo } from "./mr";
 import type { Project } from "./registry";
 
@@ -43,7 +43,7 @@ export async function prepareFixWorktree(
   const protectedBranches = new Set([mr.targetBranch, mr.defaultBranch, ...ALWAYS_PROTECTED, ...(o.protect ?? [])].filter(Boolean));
   if (protectedBranches.has(b)) throw new OrchError(`${label}'s source branch "${b}" is protected; it won't be fixed here.`);
 
-  const fetched = await git(project.path, ["fetch", "origin", b]);
+  const fetched = await gitRemote(git, project.path, ["fetch", "origin", b], "origin");
   if (fetched.code !== 0) throw new OrchError(`git fetch origin ${b} failed: ${gitMessage(fetched)}`);
 
   const folders = await listFolders(git, project);
@@ -80,7 +80,12 @@ export async function prepareFixWorktree(
   if (status.stdout.trim() !== "") {
     throw new OrchError(`${made}${dir} has uncommitted changes; commit or discard them first. Nothing was stashed or reset.`);
   }
-  const pull = await git(dir, ["pull", "--ff-only", "origin", b]);
+  let pull: Awaited<ReturnType<GitRunner>>;
+  try {
+    pull = await gitRemote(git, dir, ["pull", "--ff-only", "origin", b], "origin");
+  } catch (e) {
+    throw e instanceof OrchError ? new OrchError(`${made}${e.message}`) : e;
+  }
   if (pull.code !== 0) throw new OrchError(`${made}git pull --ff-only origin ${b} failed in ${dir}: ${gitMessage(pull)}`);
 
   return { path: dir, branch: b, created };
