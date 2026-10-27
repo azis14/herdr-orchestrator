@@ -73,7 +73,7 @@ Leave out the "Orchestrator CLI" line only for case 1, the repo's own `/mr-fix` 
 
 Drive the agent as the `claude-code` or `cursor-cli` skill describes (reading, blocked states, send-keys). Keep a count of **unchanged minutes**, starting at 0: how long the screen has shown nothing new while the agent is `working`. Loop:
 
-1. `herdr agent wait <name> --timeout 540000`, run with the Bash tool's `timeout` set to `600000` (its default of 2 minutes, or its 10-minute maximum without headroom, would kill the wait first). It settles on idle, done or blocked, or times out after 9 minutes. As the skills say, a timeout doesn't mean anything was lost: read the screen before doing anything.
+1. `herdr agent wait <name> --timeout 540000`, run with the Bash tool's `timeout` set to `600000`, its maximum (at its 2-minute default, Bash kills the wait early; 9 minutes leaves the wait a minute of headroom). It settles on idle, done or blocked, or times out after 9 minutes. As the skills say, a timeout doesn't mean anything was lost: read the screen before doing anything.
 2. `herdr agent get <name>` and `herdr agent read <name> --source visible --lines 60` (`--source recent-unwrapped --lines 200` for a long reply).
 3. Act on what the screen shows:
    - **A question** (prose, or the agent's own choice list) → ask the user with AskUserQuestion, naming the agent and the MR: the agent's own options as the options (more than 4: 3 per page plus "More…"), or a free-text question when it gives none. Send back exactly their answer: an option's number with `herdr agent send-keys <name> <n>`, or their words with `herdr agent prompt <name> '<answer>'`, each `'` in it written `'\''` (for free text to a choice list, first pick the list's own free-text entry).
