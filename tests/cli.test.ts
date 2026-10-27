@@ -6,7 +6,9 @@ import { main } from "../orch";
 import { OrchError } from "../src/errors";
 import { newJob, upsertAgent } from "../src/jobs";
 import { claudeDirName } from "../src/sessions";
-import { ok, testDeps, ws } from "./fakes";
+import type { GitRunner } from "../src/git";
+import type { Registry } from "../src/registry";
+import { fakeForge, ok, testDeps, testRegistry, ws } from "./fakes";
 
 describe("cli open", () => {
   test("opens with default agent", async () => {
@@ -431,5 +433,66 @@ describe("cli open/bash folders and sessions", () => {
     t = testDeps();
     t.deps.git = git;
     expect(await main(["bash", "shop-api", "--folder", "/tmp"], t.deps)).toBe(1);
+  });
+});
+
+describe("cli mr", () => {
+  /** A git whose origin exists only in the registry's first project. */
+  const originFor =
+    (reg: Registry, origin: string): GitRunner =>
+    async (cwd, args) =>
+      args.join(" ") === "remote get-url origin" && cwd === reg.projects[0].path
+        ? { code: 0, stdout: `${origin}\n`, stderr: "" }
+        : { code: 128, stdout: "", stderr: "no origin" };
+
+  test("mr show --json prints MrInfo", async () => {
+    const reg = testRegistry();
+    const t = testDeps({}, {
+      reg,
+      git: originFor(reg, "git@github.com:acme/shop.git"),
+      forge: fakeForge({
+        "GET repos/acme/shop/pulls/9": () => ({
+          stdout: {
+            html_url: "https://github.com/acme/shop/pull/9",
+            node_id: "PR_9",
+            title: "Fix cart",
+            body: "",
+            user: { login: "bob" },
+            state: "open",
+            merged: false,
+            draft: false,
+            head: { ref: "fix/cart", sha: "abc", repo: { full_name: "acme/shop" } },
+            base: { ref: "dev", sha: "def", repo: { full_name: "acme/shop", default_branch: "main" } },
+          },
+        }),
+        "GET user": () => ({ stdout: { login: "me" } }),
+      }),
+    });
+    expect(await main(["mr", "show", "--json", "https://github.com/acme/shop/pull/9"], t.deps)).toBe(0);
+    const mr = JSON.parse(t.out.join("\n"));
+    expect(mr).toMatchObject({ kind: "pr", number: 9, project: "shop-api", head: "abc", nodeId: "PR_9", base: null });
+  });
+
+  test("mr show prints a one-line summary", async () => {
+    const reg = testRegistry();
+    const t = testDeps({}, {
+      reg,
+      git: originFor(reg, "git@gitlab.x.io:g/p.git"),
+      forge: fakeForge({
+        "GET projects/g%2Fp/merge_requests/3": () => ({
+          stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h" },
+        }),
+        "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+        "GET user": () => ({ stdout: { username: "me" } }),
+      }),
+    });
+    expect(await main(["mr", "show", "shop-api", "3"], t.deps)).toBe(0);
+    expect(t.out).toEqual(["mr 3 open feat → dev https://gitlab.x.io/g/p/-/merge_requests/3"]);
+  });
+
+  test("mr with no subcommand prints mr usage", async () => {
+    const { deps, err } = testDeps();
+    expect(await main(["mr"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("usage: mr");
   });
 });

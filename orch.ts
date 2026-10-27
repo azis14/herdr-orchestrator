@@ -12,6 +12,7 @@ import { gitRunner, type GitRunner } from "./src/git";
 import { Herdr } from "./src/herdr";
 import { appendLog, listJobs, loadJob, newJob, patchAgent, setStage, type JobAgent, type Stage } from "./src/jobs";
 import { addAgent, removeAgent, removeProject, setDefaultAgent } from "./src/manage";
+import { showMr } from "./src/mr";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
 import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
@@ -74,7 +75,10 @@ const USAGE = `usage: bun orch.ts <command>
   job new <slug> --title T --request R --projects a,b
   job list | job show <id> | job stage <id> <stage> | job log <id> <text>
   job agent <id> <agentName> key=value...   (status, designPath, planPath, branch, worktreePath)
-  job spawn <id> <project> [agent] [--repo-worktree] [--trust]`;
+  job spawn <id> <project> [agent] [--repo-worktree] [--trust]
+  mr show <ref> [--fetch] [--json]
+  mr threads|position|post|note|reply|resolve|worktree ...
+                                 review and fix a GitLab MR / GitHub PR; <ref> is its URL, or <project> <id> (id 42, !42 or #42)`;
 
 const PATCHABLE = ["status", "designPath", "planPath", "branch", "worktreePath"] as const;
 
@@ -404,6 +408,24 @@ const commands: Record<string, Command> = {
       }
       default:
         throw new OrchError("usage: job new|list|show|stage|log|agent|spawn ...");
+    }
+  },
+
+  async mr(args, deps) {
+    const [sub, ...rest] = args;
+    switch (sub) {
+      case "show": {
+        const { positionals, values } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: { fetch: { type: "boolean" }, json: { type: "boolean" } },
+        });
+        const mr = await showMr(deps, positionals, { fetch: values.fetch });
+        deps.out(values.json ? JSON.stringify(mr, null, 2) : `${mr.kind} ${mr.number} ${mr.state} ${mr.sourceBranch} → ${mr.targetBranch} ${mr.url}`);
+        return 0;
+      }
+      default:
+        throw new OrchError("usage: mr show|threads|position|post|note|reply|resolve|worktree ...");
     }
   },
 };
