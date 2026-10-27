@@ -680,6 +680,24 @@ describe("cli mr", () => {
     expect(empty.forge.calls).toEqual([]);
   });
 
+  test("mr resolve exits 1 when the thread comes back unresolved", async () => {
+    const reg = testRegistry();
+    const git: GitRunner = async (cwd, args) =>
+      args.join(" ") === "remote get-url origin" && cwd === reg.projects[0].path ? { code: 0, stdout: "git@gitlab.x.io:g/p.git\n", stderr: "" } : { code: 128, stdout: "", stderr: "no origin" };
+    const forge = fakeForge({
+      "GET projects/g%2Fp/merge_requests/3": () => ({
+        stdout: { web_url: "https://gitlab.x.io/g/p/-/merge_requests/3", title: "T", state: "opened", source_project_id: 1, target_project_id: 1, source_branch: "feat", target_branch: "dev", sha: "h" },
+      }),
+      "GET projects/g%2Fp": () => ({ stdout: { default_branch: "main" } }),
+      "GET user": () => ({ stdout: { username: "me" } }),
+      "GET projects/g%2Fp/merge_requests/3/discussions": () => ({ stdout: [{ id: "d1", notes: [{ id: 1, resolvable: true, resolved: false }] }] }),
+      "PUT projects/g%2Fp/merge_requests/3/discussions/d1": () => ({ stdout: { id: "d1", notes: [{ id: 1, resolved: false }] } }),
+    });
+    const t = testDeps({}, { reg, git, forge });
+    expect(await main(["mr", "resolve", "shop-api", "3", "--thread", "d1"], t.deps)).toBe(1);
+    expect(t.err.join("\n")).toContain("thread d1 is still unresolved");
+  });
+
   test("mr with no subcommand prints mr usage", async () => {
     const { deps, err } = testDeps();
     expect(await main(["mr"], deps)).toBe(1);

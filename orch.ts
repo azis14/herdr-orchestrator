@@ -89,7 +89,7 @@ const USAGE = `usage: bun orch.ts <command>
   mr reply <ref> --thread ID [--json]
                                  reply in a review thread (body on stdin); prints the reply's url
   mr resolve <ref> --thread ID [--json]
-                                 resolve a review thread; prints "resolved: true"
+                                 resolve a review thread; prints "resolved: true", exits 1 if it stays unresolved
   mr worktree <ref> [--protect a,b] [--json]
                                  a worktree on the source branch to fix in (never your own checkout); prints its path
                                  review and fix a GitLab MR / GitHub PR; <ref> is its URL, or <project> <id> (id 42, !42 or #42)`;
@@ -517,6 +517,7 @@ const commands: Record<string, Command> = {
         const mr = await showMr(deps, positionals);
         if (sub === "resolve") {
           const resolved = await resolveThread(deps, mr, values.thread!);
+          if (!resolved) throw new OrchError(`thread ${values.thread} is still unresolved`);
           deps.out(values.json ? JSON.stringify({ resolved }) : `resolved: ${resolved}`);
         } else {
           const url = sub === "note" ? await postNote(deps, mr, body) : await replyThread(deps, mr, values.thread!, body);
