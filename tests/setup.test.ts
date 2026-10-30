@@ -18,6 +18,7 @@ describe("detect", () => {
     expect(d.agents.map((a) => [a.name, a.bin, a.found, a.registered])).toEqual([
       ["claude", "claude", true, false],
       ["cursor", "cursor-agent", false, false],
+      ["omp", "omp", false, false],
     ]);
     expect(d.agents[1].install).toBe(AGENT_PRESETS[1].install);
     expect(d.registry).toEqual({ exists: false, defaultAgent: null, projects: [] });
@@ -52,6 +53,7 @@ describe("detect", () => {
     expect(d.agents.map((a) => [a.registered, a.isDefault])).toEqual([
       [true, false],
       [true, true],
+      [true, false],
     ]);
     expect(d.registry).toEqual({ exists: true, defaultAgent: "cursor", projects: ["shop-api"] });
   });

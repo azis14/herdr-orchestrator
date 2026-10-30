@@ -351,11 +351,11 @@ describe("cli registry", () => {
     const t = testDeps();
     Object.defineProperty(t.deps, "reg", {
       get: () => {
-        throw new OrchError("no registry yet (missing registry/agents.json): run /setup first");
+        throw new OrchError("no registry yet (missing registry/agents.json): run /orch-setup first");
       },
     });
     expect(await main(["status"], t.deps)).toBe(1);
-    expect(t.err.join("\n")).toContain("run /setup first");
+    expect(t.err.join("\n")).toContain("run /orch-setup first");
   });
 });
 

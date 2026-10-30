@@ -2,7 +2,7 @@
 
 The control room for a Herdr session. From this one directory you can:
 
-- **open** an agent (Claude Code or Cursor) on any registered project with one command,
+- **open** an agent (Claude Code, Cursor, or OMP) on any registered project with one command,
 - see the **status** of every agent across Herdr workspaces, by project and job,
 - run cross-project **jobs**: one agent per repo, driven through design → plan → build, with every question, decision and result reported back here.
 
@@ -12,14 +12,14 @@ The control room for a Herdr session. From this one directory you can:
 - [Herdr](https://herdr.dev): the terminal workspace the agents live in. Run the orchestrator from inside a Herdr pane (`HERDR_ENV=1`).
 - git: job agents work in their own worktrees.
 - Optional, for `/mr-review` and `/mr-fix`: [`gh`](https://cli.github.com) for GitHub pull requests, [`glab`](https://gitlab.com/gitlab-org/cli) for GitLab merge requests, logged in.
-- At least one agent CLI: [Claude Code](https://claude.com/claude-code) (`claude`) and/or [Cursor CLI](https://cursor.com/cli) (`cursor-agent`).
-- Recommended for jobs: Claude job agents use your own Claude Code permission settings. With `"permissions": { "defaultMode": "auto" }` in `~/.claude/settings.json` they rarely stop to ask; without it, expect a permission prompt for most edits and commands, each routed back to you. (Cursor job agents run with `--force`.)
+- At least one agent CLI: [Claude Code](https://claude.com/claude-code) (`claude`), [Cursor CLI](https://cursor.com/cli) (`cursor-agent`), and/or Oh My Pi (`omp`).
+- Recommended for jobs: Claude job agents use your own Claude Code permission settings. With `"permissions": { "defaultMode": "auto" }` in `~/.claude/settings.json` they rarely stop to ask; without it, expect a permission prompt for most edits and commands, each routed back to you. (Cursor job agents run with `--force`; OMP job agents run with `--approval-mode yolo`.)
 
 ## Getting started
 
 1. Clone this repo.
 2. Inside Herdr, open Claude Code in the repo folder.
-3. Run `/setup`. It checks the prerequisites, lets you pick your agents and a default, registers the orchestrator itself, then helps you register your repos.
+3. Run `/orch-setup`. It checks the prerequisites, lets you pick your agents and a default, registers the orchestrator itself, then helps you register your repos.
 4. Run `/intro` for a short tour.
 
 Your registry (`registry/agents.json`, `registry/projects.json`), `docs/` and `jobs/` are local to you and ignored by git. `registry/*-example.json` show the file format.
@@ -40,7 +40,7 @@ Then, for example:
 
 | Command | What it does |
 | --- | --- |
-| `/setup` | First-time setup: checks prerequisites, picks your agents and default, registers the orchestrator itself, then your repos. Safe to run again. |
+| `/orch-setup` | First-time setup: checks prerequisites, picks your agents and default, registers the orchestrator itself, then your repos. Safe to run again. |
 | `/intro` | A short explanation of this tool. |
 | `/open [project] [agent] [--continue \| --resume] [--topic T]` | Opens an agent in a new tab of the project's workspace (the workspace labelled with the project name; created if missing). Agent defaults to your default agent. If the project has git worktrees, it first asks which folder: the base folder or a worktree. `--continue` resumes the newest session in that folder; `--resume` lets you pick one. The agent is named after its kind (`claude`, then `claude-2`, ... since Herdr names are session-wide); the tab is labelled `T` if given, else Herdr numbers it as usual. |
 | `/bash [project] [--topic T]` | Same tab placement and folder question, a plain terminal with no agent. |
@@ -51,7 +51,7 @@ Then, for example:
 | `/mr-fix <MR/PR URL \| project id> [agent]` | Fixes the open review threads of an MR/PR in an agent tab of its project, in a worktree on the MR's own branch, watched from here (it waits on the agent in the background, so you can keep working). The agent commits and pushes to that branch, replies in each thread and resolves the fixed ones. Refuses fork MRs/PRs. |
 | `/register <path> [name]` | Reads the repo, proposes a name, description and context files, and saves them after you approve. |
 | `/unregister <project>` | Removes a project from the registry (refused while an unfinished job includes it). The repo itself is untouched. The orchestrator's own entry can't be removed. |
-| `/agent add\|default\|remove <name>` | Adds Claude or Cursor, switches the default agent, or removes one. |
+| `/agent add\|default\|remove <name>` | Adds Claude, Cursor or OMP, switches the default agent, or removes one. |
 | `/job <request>` | Starts a cross-project job. Also `/job list`, `/job show <id>`, `/job resume <id>`. |
 
 Whenever a command needs you to choose (a project, a folder, a session, which agents to close, approving a design), it shows the options as a picker rather than asking you to type. Leave out the project and the command asks for it.
@@ -67,7 +67,7 @@ bun orch.ts code <project | path | .>
 bun orch.ts status [--json]
 bun orch.ts cleanup [workspace...] [--idle 1h] [--json] | cleanup --close <pick...>
 bun orch.ts setup [--json]
-bun orch.ts agent add <claude|cursor> | agent default <name> | agent remove <name>
+bun orch.ts agent add <claude|cursor|omp> | agent default <name> | agent remove <name>
 bun orch.ts project list [--json]
 bun orch.ts project add <path> --description D [--name N] [--context a,b,c]
 bun orch.ts project remove <name>
@@ -114,14 +114,14 @@ By default each job agent works in its own linked worktree at `<repo>.worktrees/
 - `registry/projects.json`: each project's `name`, `path`, `description` and `context` (the repo's agent-instruction files, relative to the repo root).
 - `registry/agents.json`: each agent's Herdr `kind`, `openArgs` for interactive use, `jobArgs` for job agents, and optional `worktreeArgs` added only inside job-created worktrees. `defaultAgent` picks the agent used when none is named.
 
-Both files are local (git-ignored); `/setup`, `/register`, `/unregister` and `/agent` write them. `registry/agents-example.json` and `registry/projects-example.json` show the format. Only Claude and Cursor are offered for now: a new agent kind also needs a skill under `.agents/skills/` that teaches the orchestrator how to drive it.
+Both files are local (git-ignored); `/orch-setup`, `/register`, `/unregister` and `/agent` write them. `registry/agents-example.json` and `registry/projects-example.json` show the format. Claude, Cursor and OMP are offered: a new agent kind also needs a skill under `.agents/skills/` that teaches the orchestrator how to drive it.
 
 ## Skills
 
 Skill sources live in `.agents/skills/<name>/`, with `.claude/skills/<name>` symlinked to each.
 
 - `orchestrate-job`: runs a job end to end
-- `claude-code`, `cursor-cli`: how to start, prompt, read and unblock each agent through Herdr
+- `claude-code`, `cursor-cli`, `omp-cli`: how to start, prompt, read and unblock each agent through Herdr
 - General-purpose skills (`brainstorming`, `writing-plans`, `executing-plans`, …) from [obra/superpowers](https://github.com/obra/superpowers), pinned in `skills-lock.json`
 
 When a job agent needs a skill, it uses the repo's own copy if there is one, otherwise this orchestrator's copy by absolute path (`bun orch.ts skills <project> --resolve <skill>`). The orchestrator never installs or edits skills inside a repo.

@@ -85,6 +85,12 @@ describe("spawnJobAgent", () => {
     expect(call(run, "agent start")!.slice(-3)).toEqual(["--", "--force", "--trust"]);
   });
 
+  test("omp job agent gets --approval-mode yolo", async () => {
+    const { deps, run, job } = setup();
+    await spawnJobAgent(deps, job.id, "shop-api", "omp", { repoWorktree: false, trust: false });
+    expect(call(run, "agent start")!.slice(-3)).toEqual(["--", "--approval-mode", "yolo"]);
+  });
+
   test("I5: cursor in repo-worktree mode (user's main checkout) does not get --trust", async () => {
     const { deps, run, job } = setup({ "workspace list": () => ok({ workspaces: [ws("w5", "shop-api", 2)] }) });
     await spawnJobAgent(deps, job.id, "shop-api", "cursor", { repoWorktree: true, trust: false });
