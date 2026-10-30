@@ -6,7 +6,7 @@ import { addProject, formatProjectsJson, readJson, type AgentDef, type Project, 
 
 export interface AgentPreset {
   def: AgentDef;
-  /** Executable `/setup` looks for on PATH. */
+  /** Executable `/orch-setup` looks for on PATH. */
   bin: string;
   install: string;
 }
@@ -28,6 +28,17 @@ export const AGENT_PRESETS: AgentPreset[] = [
     },
     bin: "cursor-agent",
     install: "curl https://cursor.com/install -fsS | bash",
+  },
+  {
+    def: {
+      name: "omp",
+      kind: "omp",
+      openArgs: [],
+      jobArgs: ["--approval-mode", "yolo"],
+      resumeArgs: ["--resume", "{session}"],
+    },
+    bin: "omp",
+    install: "",
   },
 ];
 
@@ -136,7 +147,7 @@ export function removeProject(dir: string, root: string, name: string): Project 
 const SELF_DESCRIPTION = "Herdr control room: project and agent registry, cross-repo jobs, MR review/fix (Bun + TypeScript)";
 
 /**
- * Registers the orchestrator repo at `root` as a project (what `/setup` runs): named `orchestrator`, else its folder
+ * Registers the orchestrator repo at `root` as a project (what `/orch-setup` runs): named `orchestrator`, else its folder
  * name, else skipped. Never throws on a registry conflict; it says why it skipped. Writes nothing unless it adds.
  */
 export function addSelf(dir: string, reg: Registry, root: string): { status: "added" | "registered" | "skipped"; message: string } {

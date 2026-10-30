@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-The control room for the user's Herdr session. It keeps a registry of projects (name → repo path) and agents (Claude, Cursor). It opens agents on projects, and it runs cross-project **jobs**: one agent per repo, driven through design → plan → build, with everything reported back here.
+The control room for the user's Herdr session. It keeps a registry of projects (name → repo path) and agents (Claude, Cursor, OMP). It opens agents on projects, and it runs cross-project **jobs**: one agent per repo, driven through design → plan → build, with everything reported back here.
 
 ## Commands
 
@@ -23,11 +23,11 @@ bun orch.ts code <project | path | .>            # open a project's repo, or any
 bun orch.ts status [--json]           # every Herdr agent, mapped to project and job
 bun orch.ts cleanup [workspace...] [--idle 1h] [--json]   # list dormant agents (idle, no child processes) with a pick each; nothing is closed
 bun orch.ts cleanup --close <pick...>            # close the picks the user approved
-bun orch.ts setup [--json]            # prerequisites (gh / glab optional), installed agents, registry state (what /setup reads)
-bun orch.ts agent add <claude|cursor> | agent default <name> | agent remove <name>
+bun orch.ts setup [--json]            # prerequisites (gh / glab optional), installed agents, registry state (what /orch-setup reads)
+bun orch.ts agent add <claude|cursor|omp> | agent default <name> | agent remove <name>
 bun orch.ts project list [--json]     # registered projects, most recently used first
 bun orch.ts project add <path> --description D [--name N] [--context a,b]
-bun orch.ts project add-self          # register the orchestrator repo itself (run by /setup); no-op if already registered
+bun orch.ts project add-self          # register the orchestrator repo itself (run by /orch-setup); no-op if already registered
 bun orch.ts project remove <name>     # refused while an unfinished job includes it, and for the orchestrator itself
 bun orch.ts skills [project] [--resolve <skill>]
 bun orch.ts job new|list|show|stage|log|agent|spawn ...
@@ -43,13 +43,13 @@ bun orch.ts mr resolve <ref> --thread ID              # resolve a review thread;
 bun orch.ts mr worktree <ref> [--protect a,b]         # a worktree on the MR's source branch to fix in (never your own checkout); prints its path; refuses local commits origin doesn't have
 ```
 
-Slash commands: `/setup`, `/intro`, `/open`, `/bash`, `/code`, `/status`, `/cleanup`, `/job`, `/mr-review`, `/mr-fix`, `/register`, `/unregister`, `/agent`. They call the CLI as `bun orch.ts …` from the orchestrator root, never by absolute path, so any clone works.
+Slash commands: `/orch-setup`, `/intro`, `/open`, `/bash`, `/code`, `/status`, `/cleanup`, `/job`, `/mr-review`, `/mr-fix`, `/register`, `/unregister`, `/agent`. They call the CLI as `bun orch.ts …` from the orchestrator root, never by absolute path, so any clone works.
 
 ## Architecture
 
-- **The script does the mechanics; skills do the judgment.** `orch.ts` (Bun, no dependencies) and `src/` handle the registry, Herdr calls, skill scanning, job records and spawning, all deterministically. The `orchestrate-job` skill (plus `claude-code` / `cursor-cli` for driving each agent) handles question routing, cross-repo contract checks and approval stops.
+- **The script does the mechanics; skills do the judgment.** `orch.ts` (Bun, no dependencies) and `src/` handle the registry, Herdr calls, skill scanning, job records and spawning, all deterministically. The `orchestrate-job` skill (plus `claude-code` / `cursor-cli` / `omp-cli` for driving each agent) handles question routing, cross-repo contract checks and approval stops.
 - **All Herdr, git, editor and forge calls go through injectable runners.** That's `Runner` in `src/herdr.ts`, `GitRunner` in `src/git.ts`, `EditorRunner` in `src/editor.ts` and `ForgeRunner` in `src/forge.ts` (the `gh` / `glab` calls behind `orch mr`, via `Deps.forge`), passed in via `Deps` to `main(argv, deps)` in `orch.ts`. Session stores are read from `Deps.claudeProjects` (`~/.claude/projects`) and `Deps.cursorChats` (`~/.cursor/chats`), read-only. Tests use `tests/fakes.ts` (`fakeRunner`, `testRegistry`, `testDeps`) and never touch the real Herdr session.
-- **Registry:** `registry/projects.json` and `registry/agents.json`, local to each user (git-ignored); `registry/*-example.json` are the tracked templates. `orch.ts` loads the registry lazily, so `setup` and `agent` work before it exists and other commands say "run /setup first". Projects come from `/register <path>` (or `orch project add`); entries have `name`, `path`, `description`, `context` files relative to the repo. Agents come from the presets in `src/manage.ts` (`/agent add`, `/setup`): Herdr `--kind`, `openArgs` (interactive), `jobArgs` (broad permissions for job agents), optional `worktreeArgs` (added only inside job-created worktrees) and `resumeArgs` (e.g. `["--resume", "{session}"]`). A new agent kind needs a preset plus a skill for driving it.
+- **Registry:** `registry/projects.json` and `registry/agents.json`, local to each user (git-ignored); `registry/*-example.json` are the tracked templates. `orch.ts` loads the registry lazily, so `setup` and `agent` work before it exists and other commands say "run /orch-setup first". Projects come from `/register <path>` (or `orch project add`); entries have `name`, `path`, `description`, `context` files relative to the repo. Agents come from the presets in `src/manage.ts` (`/agent add`, `/orch-setup`): Herdr `--kind`, `openArgs` (interactive), `jobArgs` (broad permissions for job agents), optional `worktreeArgs` (added only inside job-created worktrees) and `resumeArgs` (e.g. `["--resume", "{session}"]`). A new agent kind needs a preset plus a skill for driving it.
 - **Workspaces:** a project's workspace is the Herdr workspace whose label equals the project name. Job agents with the default mode get a linked worktree workspace labelled `<project>:<job-id>`, at `<repo>.worktrees/<job-id>` on branch `feature/<job-id>` off a fetched `origin/dev`. `/mr-fix` opens its agent as a tab in the project's own workspace, in a worktree at `<repo>.worktrees/mr-<n>` (GitLab) or `pr-<n>` (GitHub) on the MR's source branch (`orch mr worktree`); later runs on the same MR reuse it.
 - **Agent names** must match Herdr's `^[a-z][a-z0-9_-]{0,31}$`; `toAgentName` in `src/open.ts` sanitizes them (e.g. `shop2.0` → `shop2-0`). They're unique across the whole Herdr session, so `open` names agents after their kind and numbers repeats: `claude`, `claude-2`, ...; the tab takes `--topic`, else Herdr's default label. Job agents use `jobAgentName` in `src/spawn.ts`, which is `<project>-<slug>` plus a hash of the job id, so long slugs never collide.
 - **Job agent lifecycle:** `starting` → `started`, or `start-failed`. Running `job spawn` again on a `start-failed` agent that is now live adopts it. On a `stopped` agent, it reopens the recorded worktree and merges into the existing record. A `stopped` agent with `lastCwd` reopens there, resuming `sessionId` via the agent's `resumeArgs`. `createdWorkspace` says whether the job owns the workspace or only its tab.

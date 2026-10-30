@@ -13,7 +13,7 @@ export interface Detection {
   registry: { exists: boolean; defaultAgent: string | null; projects: string[] };
 }
 
-/** What `/setup` needs to know: prerequisites, whether we're in Herdr, installed agents and the current registry. Never needs a registry. */
+/** What `/orch-setup` needs to know: prerequisites, whether we're in Herdr, installed agents and the current registry. Never needs a registry. */
 export function detect(
   dir: string,
   which: (bin: string) => string | null,

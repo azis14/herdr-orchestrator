@@ -49,18 +49,21 @@ describe("registry", () => {
     }
     const reg = loadRegistry(dir);
     expect(reg.projects.map((p) => p.name)).toEqual(["shop-api"]);
-    expect(reg.agents.map((a) => a.name)).toEqual(["claude", "cursor"]);
+    expect(reg.agents.map((a) => a.name)).toEqual(["claude", "cursor", "omp"]);
     expect(reg.defaultAgent).toBe("claude");
     // job agents: Cursor runs everything and skips the workspace-trust dialog (new worktrees are untrusted)
     const cursor = reg.agents.find((a) => a.name === "cursor")!;
     expect(cursor.jobArgs).toEqual(["--force"]);
     expect(cursor.worktreeArgs).toEqual(["--trust"]);
+    const omp = reg.agents.find((a) => a.name === "omp")!;
+    expect(omp.jobArgs).toEqual(["--approval-mode", "yolo"]);
+    expect(omp.resumeArgs).toEqual(["--resume", "{session}"]);
     expect(reg.agents.every((a) => a.openArgs.length === 0)).toBe(true);
   });
 
-  test("missing registry files say to run /setup", () => {
+  test("missing registry files say to run /orch-setup", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orch-empty-"));
-    expect(() => loadRegistry(dir)).toThrow("no registry yet (missing registry/agents.json): run /setup first");
+    expect(() => loadRegistry(dir)).toThrow("no registry yet (missing registry/agents.json): run /orch-setup first");
     fs.writeFileSync(
       path.join(dir, "agents.json"),
       JSON.stringify({ defaultAgent: "claude", agents: [{ name: "claude", kind: "claude", openArgs: [], jobArgs: [] }] }),
