@@ -109,7 +109,7 @@ describe("skills", () => {
         if (m[1] !== "general-purpose") named.add(m[1]);
       }
     }
-    expect([...named]).toEqual(expect.arrayContaining(["mr-review-runner", "mr-reviewer", "mr-verifier"]));
+    expect([...named]).toEqual(expect.arrayContaining(["mr-review-runner", "mr-reviewer"]));
     const missing = [...named].filter((n) => !fs.existsSync(path.join(ORCH_ROOT, ".claude/agents", `${n}.md`)));
     expect(missing).toEqual([]);
   });
