@@ -55,10 +55,10 @@ Say the review of `<project> <number>` is running in the background and the user
 
 ## 5. When the runner reports
 
-Its reply is a status (`done`, `needs-user` or `failed`), counts and the report path. Drop `<project> <number>` from the running reviews, read `<run dir>/report.md` and show it as it is. With `--dry-run` it holds every comment's full text and the summary, and says nothing was posted.
+Its reply is a status (`done`, `needs-user` or `failed`), counts, then the report after a `---` line. Drop `<project> <number>` from the running reviews and show the report as it is. With `--dry-run` it holds every comment's full text and the summary, and says nothing was posted.
 
 - `done` → the report is the result.
 - `needs-user` → the review stopped on something only the user can do, e.g. submit or discard a leftover pending GitHub review, run the login command it names, or review again because the MR moved. Say what to do, and that `/mr-review <project> <number>` then starts it over.
-- `failed`, or no `report.md` → say the review failed, with the runner's reply as is. If the report says something may have been posted, say the user should check the MR before running it again.
+- `failed`, or no report → say the review failed, with the runner's reply as is. If the report says something may have been posted, say the user should check the MR before running it again.
 
 Never post, retry or carry on the review yourself.

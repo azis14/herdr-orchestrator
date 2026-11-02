@@ -1,6 +1,6 @@
 ---
 name: reviewing-mrs
-description: Use when reviewing a GitLab merge request or GitHub pull request of a registered project and posting the findings on it (the /mr-review command, run by a background mr-review-runner). Reviews the MR head in a throwaway worktree with four parallel mr-reviewer subagents (with --checks, the repo's checks run in the background meanwhile), verifies with one mr-verifier, and posts through `orch mr`.
+description: Use when reviewing a GitLab merge request or GitHub pull request of a registered project and posting the findings on it (the /mr-review command, run by a background mr-review-runner). Reviews the MR head in a throwaway worktree with one mr-reviewer subagent, or two in parallel on a larger MR (with --checks, the repo's checks run in the background meanwhile), and posts through `orch mr`.
 ---
 
 # Review a merge request
@@ -11,9 +11,9 @@ Every platform call goes through `bun orch.ts mr …`, run from the orchestrator
 
 ## Where this runs
 
-`/mr-review` runs this skill in a background `mr-review-runner` subagent, which can't ask the user anything: there is no AskUserQuestion, and a tool call that isn't allowed is denied, never prompted. So wherever a step says to ask the user or wait for them, **stop with `needs-user`** instead: remove the head worktree if there is one, write the report (step 8) saying what the user has to do and whether anything was posted, and reply with status `needs-user` and the reason.
+`/mr-review` runs this skill in a background `mr-review-runner` subagent, which can't ask the user anything: there is no AskUserQuestion, and a tool call that isn't allowed is denied, never prompted. So wherever a step says to ask the user or wait for them, **stop with `needs-user`** instead: remove the head worktree if there is one, reply with the report (step 8) saying what the user has to do and whether anything was posted, and reply with status `needs-user` and the reason.
 
-Every file of the run goes in `<run dir>`, so reviews running at once never collide: the head worktree `<run dir>/wt`, the check logs `<run dir>/checks/`, the reviewers' brief `<run dir>/brief.md`, the candidates `<run dir>/candidates.json`, the review JSON `<run dir>/review.json`, the report `<run dir>/report.md`. The caller makes `<run dir>` with `mktemp -d <scratchpad>/mr-<project>-<number>-XXXX`, under the session's scratchpad directory; given none, make it that way after step 1. With no scratchpad, stop with `needs-user`: a run directory anywhere else is outside the working directory, so reads and writes there would be denied.
+Every file of the run goes in `<run dir>`, so reviews running at once never collide: the head worktree `<run dir>/wt`, the check logs `<run dir>/checks/`, the reviewers' brief `<run dir>/brief.md`, the review JSON `<run dir>/review.json`. The report is your reply, not a file: a subagent can't write report files. The caller makes `<run dir>` with `mktemp -d <scratchpad>/mr-<project>-<number>-XXXX`, under the session's scratchpad directory; given none, make it that way after step 1. With no scratchpad, stop with `needs-user`: a run directory anywhere else is outside the working directory, so reads and writes there would be denied.
 
 ## 1. Resolve
 
@@ -42,7 +42,7 @@ Find it at `head`, so the MR's own changes to the rules count: `git -C <projectP
 - Repo comment guidance (a skill or rule about writing review comments), for tone, audience and severity rules. It overrides `mr-comments` where they differ; its posting mechanics are ignored.
 - `CODEOWNERS` (root, `.github/`, `.gitlab/` or `docs/`), for the summary's owned paths.
 
-Keep the list as repo-relative paths: the reviewers and the verifier read the guidance in the head worktree, so you don't read it in full. Read only what your own steps use: with `--checks`, how to install and run the checks (step 3; search the guidance and `README` for those commands rather than reading them whole), the comment guidance (step 6) and `CODEOWNERS` (step 7).
+Keep the list as repo-relative paths: the reviewers read the guidance in the head worktree, so you don't read it in full. Read only what your own steps use: with `--checks`, how to install and run the checks (step 3; search the guidance and `README` for those commands rather than reading them whole), the comment guidance (step 6) and `CODEOWNERS` (step 7).
 
 ## 3. Head worktree, and the checks started (`--checks`)
 
@@ -52,7 +52,7 @@ Create a detached worktree at `head` at `<WT>` = `<run dir>/wt` (it doesn't exis
 git -C <projectPath> worktree add --detach <WT> <head>
 ```
 
-It is the code the reviewers and the verifier read. The user's checkout is never touched: in `<projectPath>` you only run `git -C` read commands and `worktree add`/`remove`.
+It is the code the reviewers read. The user's checkout is never touched: in `<projectPath>` you only run `git -C` read commands and `worktree add`/`remove`.
 
 With `--checks`, start the repo's own checks in `<WT>`, never on a fork (`fork: true` → every check is "not run (fork)"):
 
@@ -63,7 +63,7 @@ With `--checks`, start the repo's own checks in `<WT>`, never on a fork (`fork: 
 - Installs only with the frozen lockfile. Env files only as the repo's rules describe; never invent values or copy secrets the rules don't mention.
 - Each check ends up passed, failed (keep the errors with their `path:line`) or not run (with the reason: no such check, setup the rules don't describe, install failed, no network). Never stop the review because checks can't run.
 
-The worktree stays until the verifier has returned and any checks have ended (step 5). Then, and on every stop or failure after this point, remove it (stop the background checks with TaskStop first if they still run):
+The worktree stays until the reviewers have returned and any checks have ended (step 5). Then, and on every stop or failure after this point, remove it (stop the background checks with TaskStop first if they still run):
 
 ```bash
 git -C <projectPath> worktree remove --force <WT>
@@ -80,19 +80,20 @@ Write the brief the reviewers share to `<run dir>/brief.md`, once:
 - the repo guidance paths, and the paths of any spec, plan or task the description names;
 - the open threads: `path:line` and the first line of each note.
 
-Dispatch four `mr-reviewer` subagents (Agent tool, `subagent_type: "mr-reviewer"`) **in one message**, so they run in parallel, one focus each: `correctness`, `repo-rules`, `tests`, `simplification`. Each prompt is only `Focus: <focus>` and `Brief: <run dir>/brief.md`. Don't read the reviewer's or verifier's agent file: what they return is described here.
+How many reviewers depends on the MR's size, from the `--stat` summary line:
 
-Each returns a JSON array of candidate findings (`severity`, `path`, `oldPath`?, `line`, `side`, `title`, `body`, `suggestion`?, `evidence`). One that returns something else or fails: dispatch it once more with the same prompt; failing again, report that focus as not reviewed.
+- **Small** (at most 10 files and 300 changed lines, insertions plus deletions): one `mr-reviewer` (Agent tool, `subagent_type: "mr-reviewer"`) with `Focus: correctness, tests, repo-rules, simplification`.
+- **Larger:** two `mr-reviewer` subagents **in one message**, so they run in parallel: `Focus: correctness, tests` and `Focus: repo-rules, simplification`.
 
-Their results arrive one at a time, as separate messages, and with `--checks` the checks' end is another. Between them, end your turn with a word at most: everything you are waiting for notifies you. Wait until all four reviewers have returned (including any second try) before step 5.
+Each prompt is only `Focus: <focuses>` and `Brief: <run dir>/brief.md`. Don't read the reviewer's agent file: what it returns is described here. Each reviewer checks its own findings against the code before returning them; there is no separate verification.
 
-## 5. Verify
+Each returns a JSON array of findings (`focus`, `severity`, `path`, `oldPath`?, `line`, `side`, `title`, `body`, `suggestion`?, `evidence`). One that returns something else or fails: dispatch it once more with the same prompt; failing again, report its focuses as not reviewed.
 
-Number every reviewer candidate from 0 and write them to `<run dir>/candidates.json`, each with its `index` and the `focus` of the reviewer that raised it. Dispatch one `mr-verifier` (`subagent_type: "mr-verifier"`) whose prompt is `Brief: <run dir>/brief.md` and `Candidates: <run dir>/candidates.json`. No candidates → no verifier. It returns `{index, verdict, reason}` per candidate; wait for that result before going on. Keep only `confirmed` ones; a candidate it skipped counts as refuted.
+With two reviewers, or with `--checks`, results arrive one at a time, as separate messages. Between them, end your turn with a word at most: everything you are waiting for notifies you. Wait until every reviewer has returned (including any second try) before step 5.
 
-If the verifier fails or returns something other than that array, dispatch it once more with the same prompt. If it fails again, post no reviewer findings: say so in the report and in the summary ("Reviewer findings not posted: verification failed"), and still post the summary with the checks and the check-failure findings.
+## 5. Collect
 
-Then, with `--checks`, the checks: if their command hasn't ended, wait for its notification. Read each `<run dir>/checks/<name>.exit` (none for a check means it never ran: the install failed, as `install.log` says), and for a failed one the errors in its log (only the part that names them, e.g. `tail` or `grep`, not the whole log). Each check failure becomes a `blocking` finding you write yourself, on the line the error names, with the error output as its evidence. It skips verification (the run is the evidence). If its line isn't in the diff (step 7), it goes in the summary; if it names no line, the summary's checks line covers it.
+With `--checks`, if their command hasn't ended, wait for its notification. Read each `<run dir>/checks/<name>.exit` (none for a check means it never ran: the install failed, as `install.log` says), and for a failed one the errors in its log (only the part that names them, e.g. `tail` or `grep`, not the whole log). Each check failure becomes a `blocking` finding you write yourself, on the line the error names, with the error output as its evidence. If its line isn't in the diff (step 7), it goes in the summary; if it names no line, the summary's checks line covers it.
 
 Remove the head worktree now (step 3).
 
@@ -130,15 +131,15 @@ Post once: no trial `--dry-run` first, and no `orch mr position` per finding. `p
 
 ## 8. Report
 
-Write the report to `<run dir>/report.md`, on every outcome:
+The report is the body of your reply (the runner's reply format says where), on every outcome:
 
 - Each finding: severity, `path:line`, one line, thread URL.
 - With `--checks`, the check results, naming every check not run and why (the commands denied in the background among them).
-- Findings moved to the summary, posted without a line, or failed (with the error); any focus not reviewed; how many candidates the verifier refuted.
+- Findings moved to the summary, posted without a line, or failed (with the error); any focus not reviewed.
 - With `--dry-run`: each comment's full text and the summary, as `mr post --dry-run` printed them, and that nothing was posted.
 - On a stop or failure: what happened, what the user has to do, and whether anything was posted.
 
-Then reply with only the status, the counts and the report path:
+Its status:
 
 - `done`: the review ran to the end.
 - `needs-user`: it stopped on something only the user can do (the stops above), with the reason.
@@ -150,6 +151,6 @@ Then reply with only the status, the counts and the report path:
 - Call the platform's API or CLI yourself. `orch mr` does all of it.
 - Touch the user's checkout: switch its branch, stash, reset, or write files in it.
 - Run a fork's code.
-- Post a reviewer finding the verifier didn't confirm (check failures are the exception: the run is their evidence), or drop one that couldn't be placed without saying so.
+- Drop a finding that couldn't be placed without saying so.
 - Ask the user or wait for them: stop with `needs-user`.
 - Leave the head worktree behind.
