@@ -35,11 +35,19 @@ Keep track of the reviews you started in this session whose runner hasn't report
 
 ## 3. Start the runner
 
-Make its run directory under this session's scratchpad directory (the one your system prompt names). With no scratchpad, say a background review can't run here (a run directory elsewhere is outside the working directory, so the runner's reads and writes there would be denied) and stop.
+Make its run directory under this session's scratchpad directory (the one your system prompt names):
 
 ```bash
 mktemp -d <scratchpad>/mr-<project>-<number>-XXXX
 ```
+
+With no scratchpad, make it in this checkout:
+
+```bash
+mktemp -d mr-<project>-<number>-XXXX
+```
+
+That directory is gitignored (`/mr-*/`). Do not commit it.
 
 The brief is these lines:
 
@@ -53,14 +61,14 @@ The brief is these lines:
 - `Orchestrator root: <your working directory>`
 - `Run directory: <run dir>`
 
-When the review agent is the one running this command, start the runner as a subagent: Agent tool, `subagent_type: "mr-review-runner"`, `run_in_background: true` if the Agent tool has that parameter (where it doesn't, subagents already run in the background), description `review <project> <number>`. Its brief is the lines above. When you are Cursor and the review agent is `cursor`, pass `model: "grok-4.7-high-fast"` on that subagent. When you are Claude and the review agent is `claude`, do not pass `model`.
+When the review agent is the one running this command, start the runner as a subagent: Agent tool, `subagent_type: "mr-review-runner"`, `run_in_background: true` if the Agent tool has that parameter (where it doesn't, subagents already run in the background), description `review <project> <number>`. Its brief is the lines above. When you are Cursor and the review agent is `cursor`, pass `model: "grok-4.7-high-fast"` on that subagent. When you are Claude and the review agent is `claude`, do not pass `model`. If starting that subagent fails, or its model is refused, show the error and stop, and don't count this MR as running.
 
 Only when the review agent is the other one, start a background command. Write the brief to `<run dir>/request.md`, then start one background command (`run_in_background: true`, no timeout that would kill it). The prompt for both is: `Read and follow <orchestrator root>/.claude/agents/mr-review-runner.md. Your brief is <run dir>/request.md. Reply with the runner's status block and nothing before Status:.`
 
 Cursor (`--model grok-4.7-high-fast` is Grok 4.7 High Fast: high thinking, fast):
 
 ```bash
-cursor-agent --print --output-format stream-json --force --trust --model grok-4.7-high-fast --workspace <orchestrator root> "<prompt>"
+cursor-agent --print --output-format stream-json --force --trust --model grok-4.7-high-fast --workspace <orchestrator root> --add-dir <run dir> "<prompt>"
 ```
 
 `--force` is so the background run is not stopped by a permission prompt it cannot answer; the review skill's Never list still holds. `--trust` answers the workspace-trust prompt for this checkout so the run is not stuck on it.
@@ -68,7 +76,7 @@ cursor-agent --print --output-format stream-json --force --trust --model grok-4.
 Claude, from this orchestrator checkout, so the repo's allow rules apply and a prompt cannot block the run:
 
 ```bash
-claude --print --output-format stream-json --forward-subagent-text --permission-prompts none "<prompt>"
+claude --print --output-format stream-json --verbose --forward-subagent-text --permission-prompts none --add-dir <run dir> "<prompt>"
 ```
 
 `--forward-subagent-text` copies each reviewer's text and thinking into the live log. `cursor-agent` or `claude` missing, or the model refused → show the error and stop, and don't count this MR as running.

@@ -110,11 +110,17 @@ describe("skills", () => {
     expect(command).toContain("When you are Claude and the review agent is `claude`, do not pass `model`.");
     expect(command).toContain("Only when the review agent is the other one, start a background command.");
     expect(command).toContain(
-      "cursor-agent --print --output-format stream-json --force --trust --model grok-4.7-high-fast --workspace",
+      "cursor-agent --print --output-format stream-json --force --trust --model grok-4.7-high-fast --workspace <orchestrator root> --add-dir <run dir>",
     );
     expect(command).toContain(
-      "claude --print --output-format stream-json --forward-subagent-text --permission-prompts none",
+      "claude --print --output-format stream-json --verbose --forward-subagent-text --permission-prompts none --add-dir <run dir>",
     );
+    expect(command).toContain("--add-dir <run dir>");
+    expect(command).toContain(
+      "If starting that subagent fails, or its model is refused, show the error and stop, and don't count this MR as running.",
+    );
+    expect(command).toContain("With no scratchpad, make it in this checkout:");
+    expect(fs.readFileSync(path.join(ORCH_ROOT, ".gitignore"), "utf8")).toContain("/mr-*/");
     expect(command).toContain("Bash(claude --print *)");
     expect(command).toContain('the `result` string of the last JSON object with `"type":"result"`');
     expect(command).toContain("A reply with no status block is `failed`");
