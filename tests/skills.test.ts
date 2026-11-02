@@ -135,6 +135,23 @@ describe("skills", () => {
     expect(runner).toContain("missing means `claude`");
   });
 
+  test("mr-review docs follow the agent running the command", () => {
+    const intro = fs.readFileSync(path.join(ORCH_ROOT, ".claude/commands/intro.md"), "utf8");
+    const readme = fs.readFileSync(path.join(ORCH_ROOT, "README.md"), "utf8");
+    const claudeMd = fs.readFileSync(path.join(ORCH_ROOT, "CLAUDE.md"), "utf8");
+    expect(intro).toContain("It runs on the agent you're talking to unless you pass `--agent`.");
+    expect(intro).toContain("`--agent cursor` uses Grok 4.7 High Fast.");
+    expect(intro).not.toContain("It runs on Claude unless you pass `--agent cursor`");
+    expect(readme).toContain("`--agent` defaults to the agent you're talking to.");
+    expect(readme).toContain("the other agent streams its progress as `stream-json`");
+    expect(readme).not.toContain("`--agent` defaults to Claude.");
+    expect(claudeMd).toContain("`--agent` defaults to the agent running the command.");
+    expect(claudeMd).toContain("`model: grok-4.7-high-fast` when that agent is Cursor");
+    expect(claudeMd).toContain("`--output-format stream-json`");
+    expect(claudeMd).toContain("`--forward-subagent-text`");
+    expect(claudeMd).not.toContain("`--agent` defaults to Claude");
+  });
+
   test("every subagent_type named in commands, agents and skills has an agent file", () => {
     const files = [
       ...fs.readdirSync(path.join(ORCH_ROOT, ".claude/commands")).map((f) => path.join(".claude/commands", f)),
