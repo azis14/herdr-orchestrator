@@ -94,6 +94,19 @@ describe("skills", () => {
     expect(clashes).toEqual([]);
   });
 
+  test("mr-review --agent defaults to claude; cursor uses grok 4.7 high fast", () => {
+    const command = fs.readFileSync(path.join(ORCH_ROOT, ".claude/commands/mr-review.md"), "utf8");
+    const skill = fs.readFileSync(path.join(ORCH_ROOT, ".agents/skills/reviewing-mrs/SKILL.md"), "utf8");
+    const runner = fs.readFileSync(path.join(ORCH_ROOT, ".claude/agents/mr-review-runner.md"), "utf8");
+    expect(command).toContain("[--agent claude|cursor]");
+    expect(command).toContain("Without `--agent`, the agent is `claude`.");
+    expect(command).toContain("--force --trust --model grok-4.7-high-fast");
+    expect(skill).toContain('model: "grok-4.7-high-fast"');
+    expect(skill).toContain("default `claude`");
+    expect(runner).toContain("grok-4.7-high-fast");
+    expect(runner).toContain("missing means `claude`");
+  });
+
   test("every subagent_type named in commands, agents and skills has an agent file", () => {
     const files = [
       ...fs.readdirSync(path.join(ORCH_ROOT, ".claude/commands")).map((f) => path.join(".claude/commands", f)),
