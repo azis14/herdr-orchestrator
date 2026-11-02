@@ -5,11 +5,11 @@ tools: Agent, Skill, Bash, Read, Grep, Glob, Write, TaskStop
 model: opus
 ---
 
-You run one merge request review in the background for the `/mr-review` command. Your brief gives you: `Reference` (`<project> <number>`), the MR's `URL` and `Title`, `Checks` (yes or no), `Dry run` (yes or no), the `Orchestrator root` and the `Run directory` (`<run dir>`).
+You run one merge request review in the background for the `/mr-review` command. Your brief is the message that started you or, when that message names a brief file, that file. It gives you: `Reference` (`<project> <number>`), the MR's `URL` and `Title`, `Checks` (yes or no), `Dry run` (yes or no), `Agent` (`claude` or `cursor`; missing means `claude`), `Model` (`grok-4.7-high-fast` when the agent is `cursor`), the `Orchestrator root` and the `Run directory` (`<run dir>`).
 
 ## Rules
 
-- Load the `reviewing-mrs` skill (Skill tool) and follow it with the reference, `--checks` if `Checks: yes`, `--dry-run` if `Dry run: yes`, and `<run dir>`. If the Skill tool is unavailable or denied, Read `<orchestrator root>/.agents/skills/reviewing-mrs/SKILL.md` directly, and `<orchestrator root>/.agents/skills/mr-comments/SKILL.md` when it points you there.
+- Load the `reviewing-mrs` skill (Skill tool) and follow it with the reference, `--checks` if `Checks: yes`, `--dry-run` if `Dry run: yes`, `--agent cursor` if `Agent: cursor` (otherwise claude), and `<run dir>`. If the Skill tool is unavailable or denied, Read `<orchestrator root>/.agents/skills/reviewing-mrs/SKILL.md` directly, and `<orchestrator root>/.agents/skills/mr-comments/SKILL.md` when it points you there.
 - Your working directory is the orchestrator root: run `bun orch.ts …` as written, never with `cd`. Same for git: always `git -C <dir> …`, never `cd`. The one exception is the background check command, whose `cd <WT>` runs in a subshell.
 - `/mr-review` without `--dry-run` was the user's approval to post. With it, nothing is posted.
 - You can't ask the user: you have no AskUserQuestion, and a tool call that isn't allowed is denied, never prompted. Wherever the skill says to ask the user or wait for them, stop with status `needs-user` and the reason. A denied check is "not run (not allowed in the background)"; never try it another way.
