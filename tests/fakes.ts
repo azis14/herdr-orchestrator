@@ -105,6 +105,7 @@ export function testDeps(handlers: Record<string, FakeHandler> = {}, overrides: 
     claudeProjects: fs.mkdtempSync(path.join(os.tmpdir(), "orch-claude-")),
     cursorChats: fs.mkdtempSync(path.join(os.tmpdir(), "orch-cursor-")),
     children: async () => [],
+    size: async () => 0,
     forge: fakeForge({}),
     readStdin: async () => "",
     which: (bin) => `/usr/bin/${bin}`,

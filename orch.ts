@@ -5,6 +5,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { closeAgents, findDormant, formatAge, formatDormant, parseDuration } from "./src/cleanup";
 import { vscodeRunner, type EditorRunner } from "./src/editor";
+import { uniqueBytes, type SizeRunner } from "./src/disk";
 import { OrchError } from "./src/errors";
 import { forgeRunner, type ForgeRunner } from "./src/forge";
 import { resolveFolder } from "./src/folders";
@@ -39,6 +40,8 @@ export interface Deps {
   /** Cursor's chat root (`~/.cursor/chats`). */
   cursorChats: string;
   children: ChildrenRunner;
+  /** Bytes deleting a folder would free. */
+  size: SizeRunner;
   /** Runs gh / glab. */
   forge: ForgeRunner;
   /** Everything piped to this process on stdin. */
@@ -609,6 +612,7 @@ if (import.meta.main) {
       claudeProjects: path.join(os.homedir(), ".claude", "projects"),
       cursorChats: path.join(os.homedir(), ".cursor", "chats"),
       children: procChildren,
+      size: uniqueBytes,
       forge: forgeRunner,
       readStdin: () => Bun.stdin.text(),
       which: (bin) => Bun.which(bin),
