@@ -23,6 +23,8 @@ bun orch.ts code <project | path | .>            # open a project's repo, or any
 bun orch.ts status [--json]           # every Herdr agent, mapped to project and job
 bun orch.ts cleanup [workspace...] [--idle 1h] [--json]   # list dormant agents (idle, no child processes) with a pick each; nothing is closed
 bun orch.ts cleanup --close <pick...>            # close the picks the user approved
+bun orch.ts clean-wt <project | path | .> [--idle D] [--json]   # list the repo's git worktrees idle D (default 7d) with what each would free and lose, and a pick each; nothing is removed
+bun orch.ts clean-wt <project | path | .> --remove <pick...>   # remove the picks the user approved (git worktree remove --force; branches stay)
 bun orch.ts setup [--json]            # prerequisites (gh / glab optional), installed agents, registry state (what /orch-setup reads)
 bun orch.ts agent add <claude|cursor|omp> | agent default <name> | agent remove <name>
 bun orch.ts project list [--json]     # registered projects, most recently used first
@@ -43,7 +45,7 @@ bun orch.ts mr resolve <ref> --thread ID              # resolve a review thread;
 bun orch.ts mr worktree <ref> [--protect a,b]         # a worktree on the MR's source branch to fix in (never your own checkout); prints its path; refuses local commits origin doesn't have
 ```
 
-Slash commands: `/orch-setup`, `/intro`, `/open`, `/bash`, `/code`, `/status`, `/cleanup`, `/job`, `/mr-review`, `/mr-fix`, `/register`, `/unregister`, `/agent`. They call the CLI as `bun orch.ts …` from the orchestrator root, never by absolute path, so any clone works.
+Slash commands: `/orch-setup`, `/intro`, `/open`, `/bash`, `/code`, `/status`, `/cleanup`, `/clean-wt`, `/job`, `/mr-review`, `/mr-fix`, `/register`, `/unregister`, `/agent`. They call the CLI as `bun orch.ts …` from the orchestrator root, never by absolute path, so any clone works.
 
 ## Architecture
 
