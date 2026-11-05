@@ -99,8 +99,14 @@ function parseStatus(raw: string): { entries: number; paths: string[] } {
   return { entries, paths };
 }
 
-const mtimeMs = (p: string, link = false): number | null =>
-  (link ? fs.lstatSync : fs.statSync)(p, { throwIfNoEntry: false })?.mtimeMs ?? null;
+/** A path's mtime, or null if it can't be read: gone (ENOENT), under a file now (ENOTDIR), unreadable (EACCES)... */
+function mtimeMs(p: string, link = false): number | null {
+  try {
+    return (link ? fs.lstatSync : fs.statSync)(p).mtimeMs;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * A worktree's last-touched time (newest of its HEAD commit, its git dir's HEAD and index, its changed and untracked

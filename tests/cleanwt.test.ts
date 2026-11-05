@@ -193,6 +193,17 @@ describe("findStale", () => {
     expect(l.candidates.map((c) => c.warnings)).toEqual([["1 uncommitted file", "2 commits not pushed"]]);
   });
 
+  test("a tracked dir replaced by a file of the same name still lists, warned uncommitted", async () => {
+    const { repo, add } = fixture();
+    const wt = add("a");
+    fs.rmSync(path.join(wt, "apps"), { recursive: true });
+    fs.writeFileSync(path.join(wt, "apps"), "now a file"); // status names apps/ui/x.txt: lstat on it is ENOTDIR
+    const { d } = depsFor(repo);
+    const l = await findStale(d, repoOf(repo), { idleMs: WEEK });
+    expect(l.candidates.map((c) => c.path)).toEqual([wt]);
+    expect(l.candidates[0].warnings).toEqual(["2 uncommitted files"]); // ` D apps/ui/x.txt` and `?? apps`
+  });
+
   test("untracked files in a new dir count each file", async () => {
     const { repo, add } = fixture();
     const wt = add("a");
