@@ -36,6 +36,19 @@ export interface WtSkipped {
   reason: string;
 }
 
+export interface WtRemoved {
+  path: string;
+  /** What removing it freed; null when that couldn't be measured. */
+  bytes: number | null;
+}
+
+export interface WtRefused {
+  pick: string;
+  /** Set when the pick named a worktree that still exists. */
+  path?: string;
+  reason: string;
+}
+
 export interface WtListing {
   repo: Repo;
   idleMs: number;
@@ -58,7 +71,16 @@ function real(p: string): string {
 
 const sha8 = (s: string) => new Bun.CryptoHasher("sha256").update(s).digest("hex").slice(0, 8);
 
+/** The first half of a pick: identifies a worktree by its real path, without containing it. */
+const pathId = (p: string) => sha8(real(p));
+
 const gitError = (r: { code: number; stderr: string }) => r.stderr.trim() || `exit ${r.code}`;
+
+/** The repo's linked worktrees that still exist; never its main checkout. */
+async function linkedWorktrees(d: CleanWtDeps, repo: Repo): Promise<Folder[]> {
+  const project = { name: repo.name ?? path.basename(repo.path), path: repo.path, description: "", context: [] };
+  return (await listFolders(d.git, project)).filter((f) => !f.base);
+}
 
 /**
  * The repo a target names: a registered project, or a directory anywhere in a (non-bare) git repo, which
@@ -205,8 +227,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * this project whose worktree isn't recorded. Herdr is asked only if some worktree is old enough.
  */
 export async function findStale(d: CleanWtDeps, repo: Repo, o: { idleMs: number }): Promise<WtListing> {
-  const project = { name: repo.name ?? path.basename(repo.path), path: repo.path, description: "", context: [] };
-  const worktrees = (await listFolders(d.git, project)).filter((f) => !f.base);
+  const worktrees = await linkedWorktrees(d, repo);
   const now = d.now().getTime();
 
   type Seen =
@@ -255,7 +276,7 @@ export async function findStale(d: CleanWtDeps, repo: Repo, o: { idleMs: number 
       branch: f.branch,
       idleMs: s.idleMs,
       warnings,
-      pick: `${sha8(real(f.path))}@${s.info.stateHash}`,
+      pick: `${pathId(f.path)}@${s.info.stateHash}`,
     });
   }
   // Oldest first, unknown ages last (sort is stable, so ties keep git's order).
@@ -279,6 +300,72 @@ export async function findStale(d: CleanWtDeps, repo: Repo, o: { idleMs: number 
     jobWarnings,
     totalBytes: sizes.reduce<number>((sum, b) => sum + (b ?? 0), 0),
   };
+}
+
+/**
+ * Removes the picked worktrees (`git worktree remove --force`; branches stay), each only if it is still the worktree
+ * the pick names, in the state it was listed in, with nothing holding it. Every other pick is refused with the reason.
+ * The idle threshold isn't checked again: any touch changes the state hash.
+ */
+export async function removeWorktrees(
+  d: CleanWtDeps,
+  repo: Repo,
+  picks: string[],
+): Promise<{ removed: WtRemoved[]; refused: WtRefused[]; freedBytes: number }> {
+  const worktrees = await linkedWorktrees(d, repo);
+  const holds = await blockedBy(d, repo, worktrees);
+  const byId = new Map(worktrees.map((f) => [pathId(f.path), f]));
+  const handled = new Set<string>();
+  const refused: WtRefused[] = [];
+  const approved: { pick: string; f: Folder }[] = [];
+  for (const pick of picks) {
+    const m = /^([0-9a-f]{8})@([0-9a-f]{8})$/.exec(pick);
+    if (!m) {
+      refused.push({ pick, reason: "bad pick" });
+      continue;
+    }
+    const [, id, state] = m;
+    if (handled.has(id)) {
+      refused.push({ pick, reason: "duplicate pick" });
+      continue;
+    }
+    handled.add(id);
+    const f = byId.get(id);
+    if (!f) {
+      refused.push({ pick, reason: "gone" });
+      continue;
+    }
+    const held = holds(f);
+    if (held) {
+      refused.push({ pick, path: f.path, reason: held });
+      continue;
+    }
+    let stateHash: string;
+    try {
+      ({ stateHash } = await inspectWorktree(d, f));
+    } catch (e) {
+      if (!(e instanceof OrchError)) throw e;
+      refused.push({ pick, path: f.path, reason: e.message });
+      continue;
+    }
+    if (stateHash !== state) {
+      refused.push({ pick, path: f.path, reason: "changed since listing" });
+      continue;
+    }
+    approved.push({ pick, f });
+  }
+
+  const sizes = await Promise.all(approved.map(({ f }) => d.size(f.path)));
+  const removed: WtRemoved[] = [];
+  for (const [i, { pick, f }] of approved.entries()) {
+    const r = await d.git(repo.path, ["worktree", "remove", "--force", f.path]);
+    if (r.code !== 0) {
+      refused.push({ pick, path: f.path, reason: `git worktree remove failed: ${gitError(r)}` });
+      continue;
+    }
+    removed.push({ path: f.path, bytes: sizes[i] });
+  }
+  return { removed, refused, freedBytes: removed.reduce((sum, r) => sum + (r.bytes ?? 0), 0) };
 }
 
 /** The `orch clean-wt` listing: the table, the total, what was held back, the recent count, then job warnings. */

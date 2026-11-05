@@ -3,9 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { findStale, formatStale, removeWorktrees, resolveRepo } from "./src/cleanwt";
 import { closeAgents, findDormant, formatAge, formatDormant, parseDuration } from "./src/cleanup";
 import { vscodeRunner, type EditorRunner } from "./src/editor";
-import { uniqueBytes, type SizeRunner } from "./src/disk";
+import { formatBytes, uniqueBytes, type SizeRunner } from "./src/disk";
 import { OrchError } from "./src/errors";
 import { forgeRunner, type ForgeRunner } from "./src/forge";
 import { resolveFolder } from "./src/folders";
@@ -65,6 +66,9 @@ const USAGE = `usage: bun orch.ts <command>
   status [--json]                every agent across workspaces, by project and job
   cleanup [workspace...] [--idle D] [--json] | cleanup --close <pick...>
                                  list dormant agents (idle D, default 1h) with a pick for each; close approved picks
+  clean-wt <project | path | .> [--idle D] [--json] | clean-wt <project | path | .> --remove <pick...>
+                                 list the repo's worktrees idle D (default 7d), what each would free and lose, with a
+                                 pick for each; remove approved picks (git worktree remove --force; branches stay)
   folders <project> [agent] [--with-sessions] [--json]
                                  the project's base folder and git worktrees, with the agent's sessions in each
   sessions <project> [agent] [--folder F] [--json]
@@ -218,6 +222,34 @@ const commands: Record<string, Command> = {
     const idleMs = parseDuration(values.idle ?? "1h");
     const r = await findDormant(deps, { workspaces: positionals, idleMs });
     deps.out(values.json ? JSON.stringify(r, null, 2) : formatDormant(r));
+    return 0;
+  },
+
+  async "clean-wt"(args, deps) {
+    const usage =
+      "usage: clean-wt <project | path | .> [--idle D] [--json] | clean-wt <project | path | .> --remove <pick...>";
+    const removeAt = args.indexOf("--remove");
+    if (removeAt >= 0) {
+      // Exactly the target before --remove, and only picks after it.
+      const picks = args.slice(removeAt + 1);
+      if (removeAt !== 1 || args[0].startsWith("-") || !picks.length || picks.some((p) => p.startsWith("-"))) {
+        throw new OrchError(usage);
+      }
+      const r = await removeWorktrees(deps, await resolveRepo(deps, args[0]), picks);
+      for (const x of r.removed) deps.out(`removed ${x.path} (${x.bytes === null ? "?" : formatBytes(x.bytes)})`);
+      for (const f of r.refused) deps.out(`not removed ${f.path ?? f.pick}: ${f.reason}`);
+      if (r.removed.length) deps.out(`freed about ${formatBytes(r.freedBytes)}`);
+      return r.removed.length || !r.refused.length ? 0 : 1;
+    }
+    const { positionals, values } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: { idle: { type: "string" }, json: { type: "boolean" } },
+    });
+    if (positionals.length !== 1) throw new OrchError(usage);
+    const idleMs = parseDuration(values.idle ?? "7d");
+    const l = await findStale(deps, await resolveRepo(deps, positionals[0]), { idleMs });
+    deps.out(values.json ? JSON.stringify(l, null, 2) : formatStale(l));
     return 0;
   },
 

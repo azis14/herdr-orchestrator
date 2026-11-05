@@ -117,3 +117,33 @@ export function testDeps(handlers: Record<string, FakeHandler> = {}, overrides: 
   };
   return { deps, out, err, run };
 }
+
+/** Runs real git in `cwd` as a throwaway identity; throws on failure. */
+export function sh(cwd: string, ...args: string[]): string {
+  const r = Bun.spawnSync(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+  return r.stdout.toString().trim();
+}
+
+/** A real repo `shop` with `main` pushed to a bare `origin`, in a temp dir; `add` makes a linked worktree. */
+export function gitFixture() {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orch-cleanwt-")));
+  const repo = path.join(root, "shop");
+  const origin = path.join(root, "origin.git");
+  sh(root, "init", "-q", "--bare", "-b", "main", origin);
+  fs.mkdirSync(path.join(repo, "apps", "ui"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "apps", "ui", "x.txt"), "x");
+  fs.writeFileSync(path.join(repo, "README"), "readme");
+  sh(root, "init", "-q", "-b", "main", repo);
+  sh(repo, "add", ".");
+  sh(repo, "commit", "-qm", "init");
+  sh(repo, "remote", "add", "origin", origin);
+  sh(repo, "push", "-q", "origin", "main");
+  const add = (name: string, o: { detach?: boolean; lock?: boolean } = {}) => {
+    const wt = path.join(root, "shop.worktrees", name);
+    if (o.detach) sh(repo, "worktree", "add", "-q", "--detach", wt);
+    else sh(repo, "worktree", "add", "-q", ...(o.lock ? ["--lock"] : []), "-b", `feature/${name.replace(/ /g, "-")}`, wt);
+    return wt;
+  };
+  return { root, repo, add };
+}

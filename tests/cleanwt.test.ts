@@ -3,46 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Deps } from "../orch";
-import { findStale, formatStale, resolveRepo, type WtListing } from "../src/cleanwt";
+import { findStale, formatStale, removeWorktrees, resolveRepo, type WtListing } from "../src/cleanwt";
 import { OrchError } from "../src/errors";
 import { gitRunner, type GitRunner } from "../src/git";
 import type { JobAgent } from "../src/jobs";
-import { ok, testDeps, testRegistry, type FakeHandler } from "./fakes";
+import { gitFixture as fixture, ok, sh, testDeps, testRegistry, type FakeHandler } from "./fakes";
 
 const DAY = 86_400_000;
 const WEEK = 7 * DAY;
 const PICK = /^[0-9a-f]{8}@[0-9a-f]{8}$/;
 
 const tmp = (name: string) => fs.mkdtempSync(path.join(os.tmpdir(), `orch-${name}-`));
-
-function sh(cwd: string, ...args: string[]): string {
-  const r = Bun.spawnSync(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stderr: "pipe" });
-  if (r.exitCode !== 0) throw new Error(r.stderr.toString());
-  return r.stdout.toString().trim();
-}
-
-/** A real repo `shop` with `main` pushed to a bare `origin`, in a temp dir; `add` makes a linked worktree. */
-function fixture() {
-  const root = fs.realpathSync(tmp("cleanwt"));
-  const repo = path.join(root, "shop");
-  const origin = path.join(root, "origin.git");
-  sh(root, "init", "-q", "--bare", "-b", "main", origin);
-  fs.mkdirSync(path.join(repo, "apps", "ui"), { recursive: true });
-  fs.writeFileSync(path.join(repo, "apps", "ui", "x.txt"), "x");
-  fs.writeFileSync(path.join(repo, "README"), "readme");
-  sh(root, "init", "-q", "-b", "main", repo);
-  sh(repo, "add", ".");
-  sh(repo, "commit", "-qm", "init");
-  sh(repo, "remote", "add", "origin", origin);
-  sh(repo, "push", "-q", "origin", "main");
-  const add = (name: string, o: { detach?: boolean; lock?: boolean } = {}) => {
-    const wt = path.join(root, "shop.worktrees", name);
-    if (o.detach) sh(repo, "worktree", "add", "-q", "--detach", wt);
-    else sh(repo, "worktree", "add", "-q", ...(o.lock ? ["--lock"] : []), "-b", `feature/${name.replace(/ /g, "-")}`, wt);
-    return wt;
-  };
-  return { root, repo, add };
-}
 
 /** Deps on the real repo: real git, faked Herdr (no panes, no worktrees open) and sizes. `old` puts now 8 days ahead. */
 function depsFor(
@@ -425,5 +396,114 @@ describe("formatStale", () => {
       totalBytes: 0,
     };
     expect(formatStale(l)).toBe("no worktrees idle for 7d or more");
+  });
+});
+
+describe("removeWorktrees", () => {
+  /** The pick findStale lists for each path, in the order given. */
+  async function picksFor(d: Deps, repo: string, ...wts: string[]): Promise<string[]> {
+    const l = await findStale(d, repoOf(repo), { idleMs: WEEK });
+    return wts.map((wt) => l.candidates.find((c) => c.path === wt)!.pick);
+  }
+
+  test("removes a picked worktree, keeps its branch, reports bytes", async () => {
+    const { repo, add } = fixture();
+    const wt = add("a");
+    const { d } = depsFor(repo);
+    const [pick] = await picksFor(d, repo, wt);
+    expect(await removeWorktrees(d, repoOf(repo), [pick])).toEqual({
+      removed: [{ path: wt, bytes: 1_000_000 }],
+      refused: [],
+      freedBytes: 1_000_000,
+    });
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(sh(repo, "branch", "--list", "feature/a")).toContain("feature/a");
+    expect(sh(repo, "worktree", "list")).not.toContain(wt);
+  });
+
+  test("a pick whose worktree is gone is refused, the rest still go", async () => {
+    const { repo, add } = fixture();
+    const [a, b] = [add("a"), add("b")];
+    const { d } = depsFor(repo);
+    const [pa, pb] = await picksFor(d, repo, a, b);
+    fs.rmSync(a, { recursive: true, force: true }); // deleted by hand between the listing and --remove
+    const r = await removeWorktrees(d, repoOf(repo), [pa, pb]);
+    expect(r.refused).toEqual([{ pick: pa, reason: "gone" }]);
+    expect(r.removed).toEqual([{ path: b, bytes: 1_000_000 }]);
+    expect(r.freedBytes).toBe(1_000_000);
+    expect(fs.existsSync(b)).toBe(false);
+  });
+
+  test("a pick whose worktree changed since listing is refused", async () => {
+    const { repo, add } = fixture();
+    const wt = add("a");
+    const { d, sized } = depsFor(repo);
+    const [pick] = await picksFor(d, repo, wt);
+    sized.length = 0;
+    fs.writeFileSync(path.join(wt, "README"), "edited after the listing");
+    expect(await removeWorktrees(d, repoOf(repo), [pick])).toEqual({
+      removed: [],
+      refused: [{ pick, path: wt, reason: "changed since listing" }],
+      freedBytes: 0,
+    });
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(sized).toEqual([]);
+  });
+
+  test("a pick whose worktree opened in Herdr since listing is refused", async () => {
+    const { repo, add } = fixture();
+    const wt = add("a");
+    let panes: unknown[] = [];
+    const { d } = depsFor(repo, { handlers: { "pane list": () => ok({ panes }) } });
+    const [pick] = await picksFor(d, repo, wt);
+    panes = [{ pane_id: "w1:p2", tab_id: "w1:t1", workspace_id: "w1", cwd: wt }];
+    const r = await removeWorktrees(d, repoOf(repo), [pick]);
+    expect(r.refused).toEqual([{ pick, path: wt, reason: "open in Herdr (pane w1:p2)" }]);
+    expect(r.removed).toEqual([]);
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  test("bad and duplicate picks are refused", async () => {
+    const { repo, add } = fixture();
+    const wt = add("a");
+    const { d } = depsFor(repo);
+    const [pick] = await picksFor(d, repo, wt);
+    const samePath = `${pick.split("@")[0]}@00000000`;
+    const r = await removeWorktrees(d, repoOf(repo), ["junk", "ABCDEF12@12345678", pick, samePath, pick]);
+    expect(r.refused).toEqual([
+      { pick: "junk", reason: "bad pick" },
+      { pick: "ABCDEF12@12345678", reason: "bad pick" },
+      { pick: samePath, reason: "duplicate pick" },
+      { pick, reason: "duplicate pick" },
+    ]);
+    expect(r.removed).toEqual([{ path: wt, bytes: 1_000_000 }]);
+  });
+
+  test("a worktree path with a space is removed by its pick", async () => {
+    const { repo, add } = fixture();
+    const wt = add("with space");
+    const { d } = depsFor(repo);
+    const [pick] = await picksFor(d, repo, wt);
+    const r = await removeWorktrees(d, repoOf(repo), [pick]);
+    expect(r.removed).toEqual([{ path: wt, bytes: 1_000_000 }]);
+    expect(r.refused).toEqual([]);
+    expect(fs.existsSync(wt)).toBe(false);
+  });
+
+  test("a failing git worktree remove is refused with git's message", async () => {
+    const { repo, add } = fixture();
+    const wt = add("a");
+    const git: GitRunner = async (cwd, args, o) =>
+      args[0] === "worktree" && args[1] === "remove"
+        ? { code: 128, stdout: "", stderr: "fatal: permission denied\n" }
+        : gitRunner(cwd, args, o);
+    const { d } = depsFor(repo, { overrides: { git } });
+    const [pick] = await picksFor(d, repo, wt);
+    expect(await removeWorktrees(d, repoOf(repo), [pick])).toEqual({
+      removed: [],
+      refused: [{ pick, path: wt, reason: "git worktree remove failed: fatal: permission denied" }],
+      freedBytes: 0,
+    });
+    expect(fs.existsSync(wt)).toBe(true);
   });
 });
