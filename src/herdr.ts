@@ -38,6 +38,21 @@ export interface TabInfo {
   pane_count: number;
 }
 
+export interface PaneInfo {
+  pane_id: string;
+  tab_id: string;
+  workspace_id: string;
+  cwd?: string;
+  foreground_cwd?: string;
+  agent?: string;
+}
+
+export interface HerdrWorktree {
+  path: string;
+  is_linked_worktree?: boolean;
+  open_workspace_id?: string;
+}
+
 export interface AgentInfo {
   name?: string;
   agent: string;
@@ -150,6 +165,21 @@ export class Herdr {
     // A missing list is not an empty one: "no tabs" would let cleanup close the workspace.
     if (!Array.isArray(tabs)) throw new HerdrError(`herdr tab list returned no tabs for ${workspaceId}`, args);
     return tabs;
+  }
+
+  async listPanes(): Promise<PaneInfo[]> {
+    const args = ["pane", "list"];
+    const panes = (await this.call(args)).panes;
+    // A missing list is not an empty one: "no panes" would let a worktree that is open read as idle.
+    if (!Array.isArray(panes)) throw new HerdrError("herdr pane list returned no panes", args);
+    return panes;
+  }
+
+  async listWorktrees(cwd: string): Promise<HerdrWorktree[]> {
+    const args = ["worktree", "list", "--cwd", cwd];
+    const worktrees = (await this.call(args)).worktrees;
+    if (!Array.isArray(worktrees)) throw new HerdrError(`herdr worktree list returned no worktrees for ${cwd}`, args);
+    return worktrees;
   }
 
   /**
