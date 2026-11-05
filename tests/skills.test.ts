@@ -194,9 +194,10 @@ describe("skills", () => {
         "Bash(git -C * worktree add --detach */mr-*/wt *)",
         "Bash(git -C * worktree remove --force */mr-*/wt)",
         "Bash(mktemp -d *)",
+        "Edit(**/mr-*/*)",
       ]),
     );
-    expect(settings.permissions.allow.length).toBe(12);
+    expect(settings.permissions.allow.length).toBe(13);
   });
 
   test("settings.json denies the git options that run code or write files", () => {
