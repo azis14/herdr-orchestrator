@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Deps } from "../orch";
-import { findStale, formatStale, removeWorktrees, resolveRepo, type WtListing } from "../src/cleanwt";
+import { blockedBy, findStale, formatStale, removeWorktrees, resolveRepo, type WtListing } from "../src/cleanwt";
 import { OrchError } from "../src/errors";
 import { gitRunner, type GitRunner } from "../src/git";
 import type { JobAgent } from "../src/jobs";
@@ -78,6 +78,18 @@ describe("resolveRepo", () => {
     } finally {
       process.chdir(cwd);
     }
+  });
+
+  test("a registered project pointing at a linked worktree resolves to the main repo", async () => {
+    const { repo, add } = fixture();
+    const wt = add("a");
+    const { d } = depsFor(repo, {
+      overrides: { reg: { ...testRegistry([]), projects: [{ name: "shop", path: wt, description: "shop", context: [] }] } },
+    });
+    const resolved = await resolveRepo(d, "shop");
+    expect(resolved).toEqual({ name: "shop", path: repo });
+    const l = await findStale(d, resolved, { idleMs: WEEK });
+    expect(l.candidates.map((c) => c.path)).toEqual([wt]); // never the main checkout
   });
 
   test("an unregistered repo resolves with no name", async () => {
@@ -232,6 +244,41 @@ describe("findStale", () => {
       "warning: job 20261102-mono is unfinished and its worktree isn't recorded; check before picking",
     ]);
     expect(l.candidates).toHaveLength(1);
+  });
+
+  test("a worktree containing another worktree is skipped as contains worktree", async () => {
+    const { repo, add } = fixture();
+    const outer = add("outer");
+    const inner = path.join(outer, "inner");
+    sh(outer, "worktree", "add", "-q", "-b", "feature/inner", inner); // git would delete it with --force on outer
+    const { d } = depsFor(repo);
+    const l = await findStale(d, repoOf(repo), { idleMs: WEEK });
+    expect(l.skipped).toEqual([
+      { path: outer, branch: "feature/outer", reason: "contains worktree shop.worktrees/outer/inner" },
+    ]);
+    expect(l.candidates.map((c) => c.path)).toEqual([inner]);
+  });
+
+  test("a Herdr workspace open on a nested worktree blocks the outer", async () => {
+    const { repo, add } = fixture();
+    const outer = add("outer");
+    const inner = path.join(outer, "inner");
+    sh(outer, "worktree", "add", "-q", "-b", "feature/inner", inner);
+    const { d } = depsFor(repo, {
+      handlers: {
+        "worktree list": () =>
+          ok({ worktrees: [{ path: inner, is_linked_worktree: true, open_workspace_id: "w7" }] }),
+      },
+    });
+    const l = await findStale(d, repoOf(repo), { idleMs: WEEK });
+    expect(l.skipped).toEqual([
+      { path: outer, branch: "feature/outer", reason: "contains worktree shop.worktrees/outer/inner" },
+      { path: inner, branch: "feature/inner", reason: "open in Herdr (workspace w7)" },
+    ]);
+    expect(l.candidates).toEqual([]);
+    // With only the outer known, the workspace open inside it still holds it.
+    const holds = await blockedBy(d, repoOf(repo), [{ path: outer, branch: "feature/outer", base: false }]);
+    expect(holds({ path: outer, branch: "feature/outer", base: false })).toBe("open in Herdr (workspace w7)");
   });
 
   test("a pane in a subfolder blocks its worktree", async () => {
@@ -437,17 +484,54 @@ describe("removeWorktrees", () => {
   test("a pick whose worktree changed since listing is refused", async () => {
     const { repo, add } = fixture();
     const wt = add("a");
-    const { d, sized } = depsFor(repo);
+    const { d } = depsFor(repo);
     const [pick] = await picksFor(d, repo, wt);
-    sized.length = 0;
     fs.writeFileSync(path.join(wt, "README"), "edited after the listing");
     expect(await removeWorktrees(d, repoOf(repo), [pick])).toEqual({
       removed: [],
       refused: [{ pick, path: wt, reason: "changed since listing" }],
       freedBytes: 0,
     });
-    expect(fs.existsSync(wt)).toBe(true);
-    expect(sized).toEqual([]);
+    expect(fs.readFileSync(path.join(wt, "README"), "utf8")).toBe("edited after the listing");
+  });
+
+  test("a pick whose worktree now contains another worktree is refused", async () => {
+    const { repo, add } = fixture();
+    const outer = add("outer");
+    const { d } = depsFor(repo);
+    const [pick] = await picksFor(d, repo, outer);
+    const inner = path.join(outer, "inner");
+    sh(outer, "worktree", "add", "-q", "-b", "feature/inner", inner);
+    expect(await removeWorktrees(d, repoOf(repo), [pick])).toEqual({
+      removed: [],
+      refused: [{ pick, path: outer, reason: "contains worktree shop.worktrees/outer/inner" }],
+      freedBytes: 0,
+    });
+    expect(fs.existsSync(outer)).toBe(true);
+    expect(fs.existsSync(inner)).toBe(true);
+  });
+
+  test("an edit made during sizing is refused as changed since listing", async () => {
+    const { repo, add } = fixture();
+    const [a, b] = [add("a"), add("b")];
+    let editing = false;
+    const { d } = depsFor(repo, {
+      overrides: {
+        size: async (dir) => {
+          if (editing && dir === a) fs.writeFileSync(path.join(a, "edited-while-sizing.txt"), "keep me");
+          return 1_000_000;
+        },
+      },
+    });
+    const [pa, pb] = await picksFor(d, repo, a, b);
+    editing = true;
+    expect(await removeWorktrees(d, repoOf(repo), [pa, pb])).toEqual({
+      removed: [{ path: b, bytes: 1_000_000 }],
+      refused: [{ pick: pa, path: a, reason: "changed since listing" }],
+      freedBytes: 1_000_000,
+    });
+    expect(fs.readFileSync(path.join(a, "edited-while-sizing.txt"), "utf8")).toBe("keep me");
+    expect(fs.existsSync(b)).toBe(false);
   });
 
   test("a pick whose worktree opened in Herdr since listing is refused", async () => {

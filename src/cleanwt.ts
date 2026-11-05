@@ -76,20 +76,30 @@ const pathId = (p: string) => sha8(real(p));
 
 const gitError = (r: { code: number; stderr: string }) => r.stderr.trim() || `exit ${r.code}`;
 
-/** The repo's linked worktrees that still exist; never its main checkout. */
-async function linkedWorktrees(d: CleanWtDeps, repo: Repo): Promise<Folder[]> {
+/** The repo's folders: its main checkout (`base`) first, then its linked worktrees that still exist. */
+async function repoFolders(d: CleanWtDeps, repo: Repo): Promise<Folder[]> {
   const project = { name: repo.name ?? path.basename(repo.path), path: repo.path, description: "", context: [] };
-  return (await listFolders(d.git, project)).filter((f) => !f.base);
+  return listFolders(d.git, project);
+}
+
+/** The main checkout of the (non-bare) repo `dir` is in. */
+async function mainCheckout(d: CleanWtDeps, dir: string): Promise<string> {
+  const r = await d.git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  if (r.code !== 0) throw new OrchError(`"${dir}" is not in a git repo`);
+  const common = r.stdout.trim();
+  if (path.basename(common) !== ".git") throw new OrchError("bare repositories aren't supported");
+  return path.dirname(common);
 }
 
 /**
- * The repo a target names: a registered project, or a directory anywhere in a (non-bare) git repo, which
- * resolves to that repo's main checkout. A registered project name wins over a directory of the same name.
+ * The repo a target names: a registered project, or a directory anywhere in a (non-bare) git repo. Either resolves
+ * to that repo's main checkout (a project whose path is a linked worktree keeps its name). A registered project
+ * name wins over a directory of the same name.
  */
 export async function resolveRepo(d: CleanWtDeps, target: string): Promise<Repo> {
   if (d.reg.projects.some((p) => p.name === target)) {
     const p = getProject(d.reg, target);
-    return { name: p.name, path: p.path };
+    return { name: p.name, path: await mainCheckout(d, p.path) };
   }
   const dir = path.resolve(target);
   if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
@@ -97,11 +107,7 @@ export async function resolveRepo(d: CleanWtDeps, target: string): Promise<Repo>
       `"${target}" is neither a project nor a directory. Known projects: ${d.reg.projects.map((p) => p.name).join(", ")}`,
     );
   }
-  const r = await d.git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  if (r.code !== 0) throw new OrchError(`"${dir}" is not in a git repo`);
-  const common = r.stdout.trim();
-  if (path.basename(common) !== ".git") throw new OrchError("bare repositories aren't supported");
-  const repo = path.dirname(common);
+  const repo = await mainCheckout(d, dir);
   const realRepo = real(repo);
   return { name: d.reg.projects.find((p) => real(p.path) === realRepo)?.name ?? null, path: repo };
 }
@@ -177,8 +183,10 @@ export async function inspectWorktree(
 
 /**
  * Why a worktree must not be removed, or null if nothing holds it: locked, an unfinished job's recorded folder in it,
- * a Herdr pane in it, or a Herdr workspace open on it. If Herdr can't be asked, every folder is held as `Herdr unavailable`.
- * "In it" compares real paths, so a pane in a subfolder holds the worktree.
+ * another of `folders` inside it (`git worktree remove --force` would delete that one too), a Herdr pane in it, or a
+ * Herdr workspace open in it. If Herdr can't be asked, every folder is held as `Herdr unavailable`.
+ * "In it" compares real paths, so a pane in a subfolder holds the worktree. Pass every folder of the repo, main
+ * checkout included, so a nested worktree is always seen.
  */
 export async function blockedBy(
   d: CleanWtDeps,
@@ -210,10 +218,12 @@ export async function blockedBy(
     const inside = (p: string) => p === wt || p.startsWith(wt + "/");
     const job = jobPaths.find((j) => inside(j.path));
     if (job) return `job ${job.id} unfinished`;
+    const nested = folders.find((o) => realOf.get(o.path)!.startsWith(wt + "/"));
+    if (nested) return `contains worktree ${path.relative(path.dirname(repo.path), nested.path)}`;
     if (!herdr) return "Herdr unavailable";
     const pane = paneCwds.find((p) => p.cwds.some(inside));
     if (pane) return `open in Herdr (pane ${pane.id})`;
-    const open = herdr.worktrees.find((w) => w.open_workspace_id && real(w.path) === wt);
+    const open = herdr.worktrees.find((w) => w.open_workspace_id && inside(real(w.path)));
     if (open) return `open in Herdr (workspace ${open.open_workspace_id})`;
     return null;
   };
@@ -227,7 +237,8 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * this project whose worktree isn't recorded. Herdr is asked only if some worktree is old enough.
  */
 export async function findStale(d: CleanWtDeps, repo: Repo, o: { idleMs: number }): Promise<WtListing> {
-  const worktrees = await linkedWorktrees(d, repo);
+  const folders = await repoFolders(d, repo);
+  const worktrees = folders.filter((f) => !f.base);
   const now = d.now().getTime();
 
   type Seen =
@@ -246,7 +257,7 @@ export async function findStale(d: CleanWtDeps, repo: Repo, o: { idleMs: number 
   );
   const isRecent = (s: Seen) => s.failed === undefined && s.idleMs !== null && s.idleMs < o.idleMs;
   const old = seen.filter((s) => s.failed === undefined && !isRecent(s)).map((s) => s.f);
-  const holds = old.length ? await blockedBy(d, repo, old) : () => null;
+  const holds = old.length ? await blockedBy(d, repo, folders) : () => null;
 
   const candidates: Omit<WtCandidate, "bytes">[] = [];
   const skipped: WtSkipped[] = [];
@@ -305,32 +316,46 @@ export async function findStale(d: CleanWtDeps, repo: Repo, o: { idleMs: number 
 /**
  * Removes the picked worktrees (`git worktree remove --force`; branches stay), each only if it is still the worktree
  * the pick names, in the state it was listed in, with nothing holding it. Every other pick is refused with the reason.
- * The idle threshold isn't checked again: any touch changes the state hash.
+ * Sizing comes first (it can take minutes); then what holds a worktree is checked once, against a fresh listing and
+ * Herdr snapshot, and each worktree's state is checked right before it is removed, so no check is minutes old.
+ * The idle threshold isn't checked again: any touch changes the state hash. Results are in pick order.
  */
 export async function removeWorktrees(
   d: CleanWtDeps,
   repo: Repo,
   picks: string[],
 ): Promise<{ removed: WtRemoved[]; refused: WtRefused[]; freedBytes: number }> {
-  const worktrees = await linkedWorktrees(d, repo);
-  const holds = await blockedBy(d, repo, worktrees);
-  const byId = new Map(worktrees.map((f) => [pathId(f.path), f]));
+  const byId = (folders: Folder[]) => new Map(folders.filter((f) => !f.base).map((f) => [pathId(f.path), f]));
+  const listed = byId(await repoFolders(d, repo));
   const handled = new Set<string>();
-  const refused: WtRefused[] = [];
-  const approved: { pick: string; f: Folder }[] = [];
-  for (const pick of picks) {
+  type Entry =
+    | { pick: string; refused: string }
+    | { pick: string; refused?: undefined; id: string; state: string; f: Folder };
+  const entries: Entry[] = picks.map((pick) => {
     const m = /^([0-9a-f]{8})@([0-9a-f]{8})$/.exec(pick);
-    if (!m) {
-      refused.push({ pick, reason: "bad pick" });
-      continue;
-    }
+    if (!m) return { pick, refused: "bad pick" };
     const [, id, state] = m;
-    if (handled.has(id)) {
-      refused.push({ pick, reason: "duplicate pick" });
+    if (handled.has(id)) return { pick, refused: "duplicate pick" };
+    handled.add(id);
+    const f = listed.get(id);
+    return f ? { pick, id, state, f } : { pick, refused: "gone" };
+  });
+  const resolved = entries.filter((e) => e.refused === undefined);
+  const sizes = new Map(await Promise.all(resolved.map(async (e) => [e.id, await d.size(e.f.path)] as const)));
+
+  // Fresh after sizing: a worktree nested, locked or opened meanwhile is seen.
+  const folders = await repoFolders(d, repo);
+  const current = byId(folders);
+  const holds = resolved.length ? await blockedBy(d, repo, folders) : () => null;
+  const removed: WtRemoved[] = [];
+  const refused: WtRefused[] = [];
+  for (const e of entries) {
+    const { pick } = e;
+    if (e.refused !== undefined) {
+      refused.push({ pick, reason: e.refused });
       continue;
     }
-    handled.add(id);
-    const f = byId.get(id);
+    const f = current.get(e.id);
     if (!f) {
       refused.push({ pick, reason: "gone" });
       continue;
@@ -343,27 +368,21 @@ export async function removeWorktrees(
     let stateHash: string;
     try {
       ({ stateHash } = await inspectWorktree(d, f));
-    } catch (e) {
-      if (!(e instanceof OrchError)) throw e;
-      refused.push({ pick, path: f.path, reason: e.message });
+    } catch (err) {
+      if (!(err instanceof OrchError)) throw err;
+      refused.push({ pick, path: f.path, reason: err.message });
       continue;
     }
-    if (stateHash !== state) {
+    if (stateHash !== e.state) {
       refused.push({ pick, path: f.path, reason: "changed since listing" });
       continue;
     }
-    approved.push({ pick, f });
-  }
-
-  const sizes = await Promise.all(approved.map(({ f }) => d.size(f.path)));
-  const removed: WtRemoved[] = [];
-  for (const [i, { pick, f }] of approved.entries()) {
     const r = await d.git(repo.path, ["worktree", "remove", "--force", f.path]);
     if (r.code !== 0) {
       refused.push({ pick, path: f.path, reason: `git worktree remove failed: ${gitError(r)}` });
       continue;
     }
-    removed.push({ path: f.path, bytes: sizes[i] });
+    removed.push({ path: f.path, bytes: sizes.get(e.id) ?? null });
   }
   return { removed, refused, freedBytes: removed.reduce((sum, r) => sum + (r.bytes ?? 0), 0) };
 }
