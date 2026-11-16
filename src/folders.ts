@@ -10,6 +10,8 @@ export interface Folder {
   /** Branch name, `detached @ <sha>`, or null when unknown. */
   branch: string | null;
   base: boolean;
+  /** Set only when git has the worktree locked (`git worktree lock`). */
+  locked?: true;
 }
 
 /** The path with symlinks resolved, or just resolved if it doesn't exist. */
@@ -52,7 +54,8 @@ export async function listFolders(git: GitRunner, p: Project): Promise<Folder[]>
       baseListed = true;
       continue;
     }
-    if (fs.existsSync(dir)) worktrees.push({ path: dir, branch, base: false });
+    const locked = lines.some((l) => l.startsWith("locked"));
+    if (fs.existsSync(dir)) worktrees.push({ path: dir, branch, base: false, ...(locked ? { locked: true as const } : {}) });
   }
   return baseListed ? [base, ...worktrees] : [{ ...base, branch: null }];
 }

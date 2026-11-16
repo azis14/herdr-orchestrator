@@ -6,9 +6,9 @@ import { main } from "../orch";
 import { OrchError } from "../src/errors";
 import { newJob, upsertAgent } from "../src/jobs";
 import { claudeDirName } from "../src/sessions";
-import type { GitRunner } from "../src/git";
+import { gitRunner, type GitRunner } from "../src/git";
 import type { Registry } from "../src/registry";
-import { fakeForge, ok, testDeps, testRegistry, ws } from "./fakes";
+import { fakeForge, gitFixture, ok, testDeps, testRegistry, ws } from "./fakes";
 
 describe("cli open", () => {
   test("opens with default agent", async () => {
@@ -343,6 +343,81 @@ describe("cli cleanup", () => {
     fs.rmSync(deps.claudeProjects, { recursive: true });
     expect(await main(["cleanup"], deps)).toBe(0);
     expect(out.join("\n").split("\n")[1].split(/\s+/).slice(0, 4)).toEqual(["idle2h", "shop2.0", "shop-api", "unknown"]);
+  });
+});
+
+describe("cli clean-wt", () => {
+  const PICK = /\b[0-9a-f]{8}@[0-9a-f]{8}\b/;
+
+  /** A real repo `shop` with one worktree `a`, 8 days idle; Herdr has nothing open; each folder frees 1,000,000 bytes. */
+  function setup() {
+    const { repo, add } = gitFixture();
+    const wt = add("a");
+    const t = testDeps(
+      { "pane list": () => ok({ panes: [] }), "worktree list": () => ok({ worktrees: [] }) },
+      {
+        reg: { ...testRegistry([]), projects: [{ name: "shop", path: repo, description: "shop", context: [] }] },
+        git: gitRunner,
+        size: async () => 1_000_000,
+        now: () => new Date(Date.now() + 8 * 86_400_000),
+      },
+    );
+    return { ...t, repo, wt };
+  }
+
+  test("clean-wt lists, then --remove removes the pick from the listing", async () => {
+    const { deps, out, wt } = setup();
+    expect(await main(["clean-wt", "shop"], deps)).toBe(0);
+    const lines = out.join("\n").split("\n");
+    expect(lines[0].split(/\s+/)).toEqual(["WORKTREE", "BRANCH", "IDLE", "FREES", "WARNINGS", "PICK"]);
+    expect(lines[1]).toStartWith("shop.worktrees/a  feature/a");
+    const pick = lines[1].match(PICK)![0];
+    expect(lines[2]).toBe("about 977 KB would be freed (shared pnpm files stay in the pnpm store)");
+    expect(fs.existsSync(wt)).toBe(true);
+
+    out.length = 0;
+    expect(await main(["clean-wt", "shop", "--json"], deps)).toBe(0);
+    expect(JSON.parse(out.join("\n")).candidates.map((c: { pick: string }) => c.pick)).toEqual([pick]);
+
+    out.length = 0;
+    expect(await main(["clean-wt", "shop", "--remove", pick], deps)).toBe(0);
+    expect(out).toEqual([`removed ${wt} (977 KB)`, "freed about 977 KB"]);
+    expect(fs.existsSync(wt)).toBe(false);
+  });
+
+  test("clean-wt --idle 9d leaves an 8-day-old worktree out; a bad --idle is rejected", async () => {
+    const { deps, out, err } = setup();
+    expect(await main(["clean-wt", "shop", "--idle", "9d"], deps)).toBe(0);
+    expect(out).toEqual(["no worktrees idle for 9d or more\n1 touched within 9d"]);
+    expect(await main(["clean-wt", "shop", "--idle", "5x"], deps)).toBe(1);
+    expect(err.join("\n")).toContain('bad --idle "5x"');
+  });
+
+  test("clean-wt usage errors", async () => {
+    const { deps, err, wt } = setup();
+    for (const argv of [
+      ["clean-wt"],
+      ["clean-wt", "shop", "other"],
+      ["clean-wt", "shop", "--remove"],
+      ["clean-wt", "--remove", "aaaaaaaa@bbbbbbbb"],
+      ["clean-wt", "shop", "other", "--remove", "aaaaaaaa@bbbbbbbb"],
+      ["clean-wt", "--json", "--remove", "aaaaaaaa@bbbbbbbb"],
+      ["clean-wt", "shop", "--remove", "aaaaaaaa@bbbbbbbb", "--idle", "1d"],
+    ]) {
+      err.length = 0;
+      expect(await main(argv, deps)).toBe(1);
+      expect(err).toEqual([
+        "orch: usage: clean-wt <project | path | .> [--idle D] [--json] | clean-wt <project | path | .> --remove <pick...>",
+      ]);
+    }
+    expect(fs.existsSync(wt)).toBe(true);
+  });
+
+  test("clean-wt --remove exits 1 when every pick is refused", async () => {
+    const { deps, out, wt } = setup();
+    expect(await main(["clean-wt", "shop", "--remove", "junk", "deadbeef@00000000"], deps)).toBe(1);
+    expect(out).toEqual(["not removed junk: bad pick", "not removed deadbeef@00000000: gone"]);
+    expect(fs.existsSync(wt)).toBe(true);
   });
 });
 

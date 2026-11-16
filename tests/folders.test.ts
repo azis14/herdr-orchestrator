@@ -9,10 +9,15 @@ import { testRegistry } from "./fakes";
 
 const tmp = (name: string) => fs.mkdtempSync(path.join(os.tmpdir(), `orch-${name}-`));
 
-function porcelain(entries: { path: string; head?: string; branch?: string; detached?: boolean }[]): string {
+function porcelain(entries: { path: string; head?: string; branch?: string; detached?: boolean; locked?: boolean }[]): string {
   return entries
     .map((e) =>
-      [`worktree ${e.path}`, `HEAD ${e.head ?? "1111111111111111111111111111111111111111"}`, e.detached ? "detached" : `branch refs/heads/${e.branch}`].join("\n"),
+      [
+        `worktree ${e.path}`,
+        `HEAD ${e.head ?? "1111111111111111111111111111111111111111"}`,
+        e.detached ? "detached" : `branch refs/heads/${e.branch}`,
+        ...(e.locked ? ["locked"] : []),
+      ].join("\n"),
     )
     .join("\n\n") + "\n";
 }
@@ -34,6 +39,23 @@ describe("listFolders", () => {
       { path: p.path, branch: "dev", base: true },
       { path: wt1, branch: "feature/a", base: false },
       { path: wt2, branch: "detached @ abc1234", base: false },
+    ]);
+  });
+
+  test("a locked worktree is marked locked: true", async () => {
+    const p = testRegistry(["shop-api"]).projects[0];
+    const [wt1, wt2] = [tmp("wt1"), tmp("wt2")];
+    const git = gitReturning(
+      porcelain([
+        { path: p.path, branch: "dev" },
+        { path: wt1, branch: "feature/a", locked: true },
+        { path: wt2, branch: "feature/b" },
+      ]),
+    );
+    expect(await listFolders(git, p)).toEqual([
+      { path: p.path, branch: "dev", base: true },
+      { path: wt1, branch: "feature/a", base: false, locked: true },
+      { path: wt2, branch: "feature/b", base: false },
     ]);
   });
 

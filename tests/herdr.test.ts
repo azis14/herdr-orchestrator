@@ -141,6 +141,39 @@ describe("Herdr", () => {
     expect(await new Herdr(fakeRunner({ "tab list": () => ok({ tabs: [] }) })).listTabs("w3")).toEqual([]);
   });
 
+  test("listPanes returns panes", async () => {
+    const pane = { pane_id: "wC:p4", tab_id: "wC:t4", workspace_id: "wC", agent: "claude", cwd: "/home/x", foreground_cwd: "/home/x" };
+    const run = fakeRunner({ "pane list": () => ok({ panes: [pane] }) });
+    expect(await new Herdr(run).listPanes()).toEqual([pane]);
+    expect(run.calls[0]).toEqual(["pane", "list"]);
+  });
+
+  test("listPanes throws HerdrError when the reply has no panes array", async () => {
+    for (const result of [{}, { panes: null }, { panes: "x" }]) {
+      const run = fakeRunner({ "pane list": () => ok(result) });
+      expect(await new Herdr(run).listPanes().catch((e) => e)).toBeInstanceOf(HerdrError);
+    }
+    expect(await new Herdr(fakeRunner({ "pane list": () => ok({ panes: [] }) })).listPanes()).toEqual([]);
+  });
+
+  test("listWorktrees passes --cwd and returns worktrees", async () => {
+    const wts = [
+      { path: "/r", is_linked_worktree: false, open_workspace_id: "wC" },
+      { path: "/r.worktrees/a", is_linked_worktree: true },
+    ];
+    const run = fakeRunner({ "worktree list": () => ok({ worktrees: wts }) });
+    expect(await new Herdr(run).listWorktrees("/r")).toEqual(wts);
+    expect(run.calls[0]).toEqual(["worktree", "list", "--cwd", "/r"]);
+  });
+
+  test("listWorktrees throws HerdrError when the reply has no worktrees array", async () => {
+    for (const result of [{}, { worktrees: null }, { worktrees: "x" }]) {
+      const run = fakeRunner({ "worktree list": () => ok(result) });
+      expect(await new Herdr(run).listWorktrees("/r").catch((e) => e)).toBeInstanceOf(HerdrError);
+    }
+    expect(await new Herdr(fakeRunner({ "worktree list": () => ok({ worktrees: [] }) })).listWorktrees("/r")).toEqual([]);
+  });
+
   test("readAgent returns raw stdout and throws HerdrError on failure", async () => {
     const run = fakeRunner({ "agent read": (a) => (a[2] === "gone" ? { code: 1, stderr: "no such pane" } : { stdout: "line 1\nline 2\n" }) });
     const h = new Herdr(run);
