@@ -105,12 +105,12 @@ describe("skills", () => {
     expect(command).not.toContain("Without `--agent`, the agent is `claude`.");
     expect(command).toContain('subagent_type: "mr-review-runner"');
     expect(command).toContain(
-      'When you are Cursor and the review agent is `cursor`, pass `model: "grok-4.7-high-fast"` on that subagent.',
+      'When you are Cursor and the review agent is `cursor`, pass `model: "grok-4.7-medium"` on that subagent.',
     );
     expect(command).toContain("When you are Claude and the review agent is `claude`, do not pass `model`.");
     expect(command).toContain("Only when the review agent is the other one, start a background command.");
     expect(command).toContain(
-      "cursor-agent --print --output-format stream-json --force --trust --model grok-4.7-high-fast --workspace <orchestrator root> --add-dir <run dir>",
+      "cursor-agent --print --output-format stream-json --force --trust --model grok-4.7-medium --workspace <orchestrator root> --add-dir <run dir>",
     );
     expect(command).toContain(
       "claude --print --output-format stream-json --verbose --forward-subagent-text --permission-prompts none --add-dir <run dir>",
@@ -126,7 +126,7 @@ describe("skills", () => {
     expect(command).toContain("A reply with no status block is `failed`");
     expect(command).toContain("don't count this MR as running");
     expect(command).toContain("`Agent: claude` or `cursor`");
-    expect(command).toContain("`Model: grok-4.7-high-fast` (only when the agent is `cursor`)");
+    expect(command).toContain("`Model: grok-4.7-medium` (only when the agent is `cursor`)");
     expect(command).not.toContain("--output-format text");
     expect(command).not.toContain("--stream-partial-output");
     expect(command).not.toContain("--include-partial-messages");
@@ -135,9 +135,9 @@ describe("skills", () => {
     expect(command).not.toContain("herdr tab");
     expect(skill).toContain("omitted here means `claude`");
     expect(skill).toContain("a `--print` process when it is the other one");
-    expect(skill).toContain('model: "grok-4.7-high-fast"');
+    expect(skill).toContain('model: "grok-4.7-medium"');
     expect(skill).not.toContain("default `claude`");
-    expect(runner).toContain("grok-4.7-high-fast");
+    expect(runner).toContain("grok-4.7-medium");
     expect(runner).toContain("missing means `claude`");
   });
 
@@ -146,13 +146,13 @@ describe("skills", () => {
     const readme = fs.readFileSync(path.join(ORCH_ROOT, "README.md"), "utf8");
     const claudeMd = fs.readFileSync(path.join(ORCH_ROOT, "CLAUDE.md"), "utf8");
     expect(intro).toContain("It runs on the agent you're talking to unless you pass `--agent`.");
-    expect(intro).toContain("`--agent cursor` uses Grok 4.7 High Fast.");
+    expect(intro).toContain("`--agent cursor` uses Grok 4.7 Medium.");
     expect(intro).not.toContain("It runs on Claude unless you pass `--agent cursor`");
     expect(readme).toContain("`--agent` defaults to the agent you're talking to.");
     expect(readme).toContain("the other agent streams its progress as `stream-json`");
     expect(readme).not.toContain("`--agent` defaults to Claude.");
     expect(claudeMd).toContain("`--agent` defaults to the agent running the command.");
-    expect(claudeMd).toContain("`model: grok-4.7-high-fast` when that agent is Cursor");
+    expect(claudeMd).toContain("`model: grok-4.7-medium` when that agent is Cursor");
     expect(claudeMd).toContain("`--output-format stream-json`");
     expect(claudeMd).toContain("`--forward-subagent-text`");
     expect(claudeMd).not.toContain("`--agent` defaults to Claude");
