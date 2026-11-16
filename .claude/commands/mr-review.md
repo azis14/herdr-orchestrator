@@ -57,18 +57,18 @@ The brief is these lines:
 - `Checks: yes` or `no`
 - `Dry run: yes` or `no`
 - `Agent: claude` or `cursor`
-- `Model: grok-4.7-high-fast` (only when the agent is `cursor`)
+- `Model: grok-4.7-medium` (only when the agent is `cursor`)
 - `Orchestrator root: <your working directory>`
 - `Run directory: <run dir>`
 
-When the review agent is the one running this command, start the runner as a subagent: Agent tool, `subagent_type: "mr-review-runner"`, `run_in_background: true` if the Agent tool has that parameter (where it doesn't, subagents already run in the background), description `review <project> <number>`. Its brief is the lines above. When you are Cursor and the review agent is `cursor`, pass `model: "grok-4.7-high-fast"` on that subagent. When you are Claude and the review agent is `claude`, do not pass `model`. If starting that subagent fails, or its model is refused, show the error and stop, and don't count this MR as running.
+When the review agent is the one running this command, start the runner as a subagent: Agent tool, `subagent_type: "mr-review-runner"`, `run_in_background: true` if the Agent tool has that parameter (where it doesn't, subagents already run in the background), description `review <project> <number>`. Its brief is the lines above. When you are Cursor and the review agent is `cursor`, pass `model: "grok-4.7-medium"` on that subagent. When you are Claude and the review agent is `claude`, do not pass `model`. If starting that subagent fails, or its model is refused, show the error and stop, and don't count this MR as running.
 
 Only when the review agent is the other one, start a background command. Write the brief to `<run dir>/request.md`, then start one background command (`run_in_background: true`, no timeout that would kill it). The prompt for both is: `Read and follow <orchestrator root>/.claude/agents/mr-review-runner.md. Your brief is <run dir>/request.md. Reply with the runner's status block and nothing before Status:.`
 
-Cursor (`--model grok-4.7-high-fast` is Grok 4.7 High Fast: high thinking, fast):
+Cursor (`--model grok-4.7-medium` is Grok 4.7 Medium: medium thinking):
 
 ```bash
-cursor-agent --print --output-format stream-json --force --trust --model grok-4.7-high-fast --workspace <orchestrator root> --add-dir <run dir> "<prompt>"
+cursor-agent --print --output-format stream-json --force --trust --model grok-4.7-medium --workspace <orchestrator root> --add-dir <run dir> "<prompt>"
 ```
 
 `--force` is so the background run is not stopped by a permission prompt it cannot answer; the review skill's Never list still holds. `--trust` answers the workspace-trust prompt for this checkout so the run is not stuck on it.
