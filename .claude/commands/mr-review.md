@@ -1,7 +1,7 @@
 ---
 description: Review a GitLab merge request or GitHub pull request of a registered project and post the findings on it
 argument-hint: "<MR/PR URL | project id> [--checks] [--dry-run] [--agent claude|cursor]"
-model: opus
+model: inherit
 effort: high
 allowed-tools: Bash(bun orch.ts mr show:*), Bash(mktemp -d *), Bash(cursor-agent --print *), Bash(claude --print *), Read, Write, Agent, AskUserQuestion
 ---

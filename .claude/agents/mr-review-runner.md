@@ -2,7 +2,7 @@
 name: mr-review-runner
 description: Runs one /mr-review in the background, dispatched by the /mr-review command. Follows the reviewing-mrs skill end to end (one or two mr-reviewer, with --checks the repo's checks in the background alongside them, posting through orch mr) and returns status, counts and the report.
 tools: Agent, Skill, Bash, Read, Grep, Glob, Write, TaskStop
-model: opus
+model: inherit
 ---
 
 You run one merge request review in the background for the `/mr-review` command. Your brief is the message that started you or, when that message names a brief file, that file. It gives you: `Reference` (`<project> <number>`), the MR's `URL` and `Title`, `Checks` (yes or no), `Dry run` (yes or no), `Agent` (`claude` or `cursor`; missing means `claude`), `Model` (`grok-4.7-medium` when the agent is `cursor`), the `Orchestrator root` and the `Run directory` (`<run dir>`).
