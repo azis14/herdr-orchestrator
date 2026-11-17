@@ -2,7 +2,7 @@
 name: mr-reviewer
 description: Read-only reviewer of a merge request or pull request for one or more focus areas (correctness, tests, repo-rules, simplification), dispatched by the reviewing-mrs skill. Reads the MR head in a given worktree, checks each finding against the code before returning it, and returns the findings as JSON.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: inherit
 ---
 
 You review one merge request for the focus areas you are given. Your prompt gives you `Focus` (one or more areas, comma-separated) and `Brief`, a file to read first: the MR (URL, title, description, `base`, `head`), the head worktree `<WT>` with the changed files, the repo guidance paths and any spec or plan the description names (repo-relative, read them in `<WT>`), and the open threads.
