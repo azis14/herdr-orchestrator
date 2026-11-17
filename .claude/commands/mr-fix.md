@@ -1,7 +1,7 @@
 ---
 description: Fix the open review threads on a GitLab merge request or GitHub pull request, in an agent tab of its project, watched from here
 argument-hint: "<MR/PR URL | project id> [agent]"
-model: opus
+model: inherit
 effort: high
 allowed-tools: Bash(bun orch.ts mr:*), Bash(bun orch.ts open:*), Bash(bun orch.ts skills:*), Bash(herdr workspace list:*), Bash(herdr tab list:*), Bash(herdr agent:*), Bash(herdr pane read:*), Bash(herdr pane send-keys:*), Bash(herdr pane close:*), Bash(git -C * worktree remove *), Bash(pwd), Read, Grep, Glob, AskUserQuestion
 ---
