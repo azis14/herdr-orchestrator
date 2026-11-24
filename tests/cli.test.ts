@@ -130,6 +130,35 @@ describe("cli project", () => {
     expect(err.join("\n")).toContain("already registered");
   });
 
+  test("project context --json: present, absent, unknown project", async () => {
+    const { deps, out, err } = setup();
+    fs.mkdirSync(path.join(deps.root, "registry/projects"));
+    fs.writeFileSync(path.join(deps.root, "registry/projects/shop-api.md"), "---\nmrReview:\n  skill: r/SKILL.md\n---\n## mr-review\nBe strict.\n");
+    expect(await main(["project", "context", "shop-api", "--json"], deps)).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({
+      present: true,
+      mrReview: { skill: "r/SKILL.md", mode: "read-only" },
+      instructions: "Be strict.",
+      warnings: [],
+    });
+    out.length = 0;
+    expect(await main(["project", "context", "shop-ui", "--json"], deps)).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ present: false, mrReview: {}, instructions: "", warnings: [] });
+    expect(await main(["project", "context", "nope", "--json"], deps)).toBe(1);
+    expect(err.join("\n")).toContain('unknown project "nope"');
+  });
+
+  test("project context text names the skill and warnings", async () => {
+    const { deps, out } = setup();
+    fs.mkdirSync(path.join(deps.root, "registry/projects"));
+    fs.writeFileSync(path.join(deps.root, "registry/projects/shop-api.md"), "---\nmrReview: [x\n---\nnotes\n");
+    expect(await main(["project", "context", "shop-api"], deps)).toBe(0);
+    const text = out.join("\n");
+    expect(text).toContain("warning: invalid frontmatter in registry/projects/shop-api.md");
+    expect(text).toContain("review skill: -");
+    expect(text).toContain("notes");
+  });
+
   test("project with no or unknown subcommand returns 1 with usage", async () => {
     for (const argv of [["project"], ["project", "rm"]]) {
       const { deps, err } = setup();
