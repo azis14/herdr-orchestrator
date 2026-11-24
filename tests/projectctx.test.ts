@@ -110,6 +110,15 @@ describe("loadProjectContext", () => {
     expect(c.warnings).toEqual(["ignored registry/projects/shop.md: it links outside registry/projects/"]);
   });
 
+  test("an unreadable context file (a directory) is a warning, not an error", () => {
+    const dir = regDir();
+    fs.mkdirSync(path.join(dir, "projects", "shop.md"));
+    const c = loadProjectContext(dir, "shop");
+    expect(c).toMatchObject({ present: false, mrReview: {}, instructions: "" });
+    expect(c.warnings).toHaveLength(1);
+    expect(c.warnings[0]).toStartWith("cannot read registry/projects/shop.md: ");
+  });
+
   test("a project name that isn't a plain file name is refused", () => {
     const dir = regDir();
     for (const name of ["../x", "a/b", "..", "", "a b"]) {

@@ -33,13 +33,19 @@ export function loadProjectContext(dir: string, name: string): ProjectContext {
   const ctx: ProjectContext = { present: false, path: file, mrReview: {}, instructions: "", warnings: [] };
   if (!fs.existsSync(file)) return ctx;
 
-  const real = fs.realpathSync(file);
-  if (path.dirname(real) !== fs.realpathSync(projectsDir)) {
-    ctx.warnings.push(`ignored ${rel}: it links outside registry/projects/`);
+  let text: string;
+  try {
+    const real = fs.realpathSync(file);
+    if (path.dirname(real) !== fs.realpathSync(projectsDir)) {
+      ctx.warnings.push(`ignored ${rel}: it links outside registry/projects/`);
+      return ctx;
+    }
+    text = fs.readFileSync(real, "utf8").replace(/\r\n/g, "\n");
+  } catch (e) {
+    ctx.warnings.push(`cannot read ${rel}: ${(e as Error).message}`);
     return ctx;
   }
   ctx.present = true;
-  const text = fs.readFileSync(real, "utf8").replace(/\r\n/g, "\n");
 
   let body = text;
   let front: unknown = {};
