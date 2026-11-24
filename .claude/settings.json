@@ -5,6 +5,7 @@
       "Bash(bun orch.ts mr threads:*)",
       "Bash(bun orch.ts mr post:*)",
       "Bash(bun orch.ts skills:*)",
+      "Bash(bun orch.ts project context:*)",
       "Bash(git -C * show *)",
       "Bash(git -C * ls-tree *)",
       "Bash(git -C * diff *)",

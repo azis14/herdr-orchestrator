@@ -73,6 +73,7 @@ bun orch.ts agent add <claude|cursor|omp> | agent default <name> | agent remove 
 bun orch.ts project list [--json]
 bun orch.ts project add <path> --description D [--name N] [--context a,b,c]
 bun orch.ts project remove <name>
+bun orch.ts project context <name> [--json]
 bun orch.ts skills [project] [--resolve <skill>] [--json]
 bun orch.ts job new <slug> --title T --request R --projects a,b
 bun orch.ts job list
@@ -116,7 +117,9 @@ By default each job agent works in its own linked worktree at `<repo>.worktrees/
 - `registry/projects.json`: each project's `name`, `path`, `description` and `context` (the repo's agent-instruction files, relative to the repo root).
 - `registry/agents.json`: each agent's Herdr `kind`, `openArgs` for interactive use, `jobArgs` for job agents, and optional `worktreeArgs` added only inside job-created worktrees. `defaultAgent` picks the agent used when none is named.
 
-Both files are local (git-ignored); `/orch-setup`, `/register`, `/unregister` and `/agent` write them. `registry/agents-example.json` and `registry/projects-example.json` show the format. Claude, Cursor and OMP are offered: a new agent kind also needs a skill under `.agents/skills/` that teaches the orchestrator how to drive it.
+- `registry/projects/<project>.md` (optional): your own notes on a project, kept outside its repo. Its `## mr-review` section (or the whole body, if it has none) goes into every `/mr-review` brief. Its frontmatter can set `mrReview.skill`, a repo-relative review skill read from the MR's head: on that project it replaces the repo-rules and simplification reviewer, run read-only and reporting findings only. `bun orch.ts project context <project>` shows what the review will use. A missing file changes nothing; a malformed one is reported as a warning and never blocks a review. `registry/project-example.md` shows the format.
+
+All of these are local (git-ignored); `/orch-setup`, `/register`, `/unregister` and `/agent` write the JSON files, and you write the notes files. `registry/agents-example.json` and `registry/projects-example.json` show the format. Claude, Cursor and OMP are offered: a new agent kind also needs a skill under `.agents/skills/` that teaches the orchestrator how to drive it.
 
 ## Skills
 
