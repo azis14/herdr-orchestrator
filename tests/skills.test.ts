@@ -186,6 +186,7 @@ describe("skills", () => {
         "Bash(bun orch.ts mr threads:*)",
         "Bash(bun orch.ts mr post:*)",
         "Bash(bun orch.ts skills:*)",
+        "Bash(bun orch.ts project context:*)",
         "Bash(git -C * show *)",
         "Bash(git -C * ls-tree *)",
         "Bash(git -C * diff *)",
@@ -197,7 +198,7 @@ describe("skills", () => {
         "Edit(**/mr-*/*)",
       ]),
     );
-    expect(settings.permissions.allow.length).toBe(13);
+    expect(settings.permissions.allow.length).toBe(14);
   });
 
   test("settings.json denies the git options that run code or write files", () => {

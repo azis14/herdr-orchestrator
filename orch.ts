@@ -20,6 +20,7 @@ import { prepareFixWorktree } from "./src/mrworktree";
 import { checkBody, formatPost, nothingPosted, OutsideError, parseReviewInput, postNote, postReview, replyThread, resolveThread, type ReviewInput } from "./src/mrpost";
 import { openAgent, openTerminal } from "./src/open";
 import { procChildren, type ChildrenRunner } from "./src/proc";
+import { loadProjectContext } from "./src/projectctx";
 import { addProject, getAgent, getProject, loadRegistry, ORCH_ROOT, type Registry } from "./src/registry";
 import { listFolderEntries, listProjects, listSessions } from "./src/sessions";
 import { projectSkills, resolveSkill, scanSkills } from "./src/skills";
@@ -78,6 +79,8 @@ const USAGE = `usage: bun orch.ts <command>
                                  register a repo as a project
   project add-self               register the orchestrator repo itself (what /setup runs)
   project remove <name>          unregister a project (refused while an unfinished job includes it, and for the orchestrator itself)
+  project context <name> [--json]
+                                 the project's local notes (registry/projects/<name>.md): review skill and instructions
   setup [--json]                 prerequisites, installed agents and registry state, for /setup
   agent add <claude|cursor> | agent default <name> | agent remove <name>
                                  register an agent, make it the default, or remove it
@@ -256,7 +259,25 @@ const commands: Record<string, Command> = {
   async project(args, deps) {
     const [sub, ...rest] = args;
     const usage =
-      "usage: project list [--json] | project add <path> --description D [--name N] [--context a,b,c] | project add-self | project remove <name>";
+      "usage: project list [--json] | project add <path> --description D [--name N] [--context a,b,c] | project add-self | project remove <name> | project context <name> [--json]";
+    if (sub === "context") {
+      const { positionals, values } = parseArgs({ args: rest, allowPositionals: true, options: { json: { type: "boolean" } } });
+      if (positionals.length !== 1) throw new OrchError(usage);
+      const p = getProject(deps.reg, positionals[0]);
+      const c = loadProjectContext(path.join(deps.root, "registry"), p.name);
+      if (values.json) {
+        deps.out(JSON.stringify(c, null, 2));
+        return 0;
+      }
+      const lines = c.warnings.map((w) => `warning: ${w}`);
+      if (!c.present) lines.push(`no context file for ${p.name} (${c.path})`);
+      else {
+        lines.push(`file: ${c.path}`, `review skill: ${c.mrReview.skill ? `${c.mrReview.skill} (${c.mrReview.mode})` : "-"}`);
+        if (c.instructions) lines.push("", c.instructions);
+      }
+      deps.out(lines.join("\n"));
+      return 0;
+    }
     if (sub === "list") {
       const { values } = parseArgs({ args: rest, options: { json: { type: "boolean" } } });
       const rows = listProjects(deps);

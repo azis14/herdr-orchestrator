@@ -32,6 +32,7 @@ Reply on every outcome with this, then the report (the skill's step 8) after the
 Status: done | needs-user | failed
 Reason: <one line; needs-user and failed only>
 Findings: <n> posted (<n> blocking, <n> should fix, <n> nit), <n> in the summary
+Review skill: <path from the project context> | none
 ---
 <the report>
 ```

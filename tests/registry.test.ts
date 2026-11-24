@@ -13,6 +13,7 @@ import {
   projectForPath,
   type Registry,
 } from "../src/registry";
+import { loadProjectContext } from "../src/projectctx";
 import { testRegistry } from "./fakes";
 
 function tempRegistry(projects: unknown[], agents?: unknown): string {
@@ -59,6 +60,18 @@ describe("registry", () => {
     expect(omp.jobArgs).toEqual(["--approval-mode", "yolo"]);
     expect(omp.resumeArgs).toEqual(["--resume", "{session}"]);
     expect(reg.agents.every((a) => a.openArgs.length === 0)).toBe(true);
+  });
+
+  test("project context files are ignored by git, and the example parses cleanly", () => {
+    const ignored = fs.readFileSync(path.join(ORCH_ROOT, "registry/.gitignore"), "utf8").split("\n");
+    expect(ignored).toContain("projects/");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orch-example-"));
+    fs.mkdirSync(path.join(dir, "projects"));
+    fs.copyFileSync(path.join(ORCH_ROOT, "registry/project-example.md"), path.join(dir, "projects/shop-api.md"));
+    const c = loadProjectContext(dir, "shop-api");
+    expect(c.warnings).toEqual([]);
+    expect(c.mrReview).toEqual({ skill: "docs/review/SKILL.md", mode: "read-only" });
+    expect(c.instructions).toStartWith("Review with the repo's review skill");
   });
 
   test("missing registry files say to run /orch-setup", () => {
